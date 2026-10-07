@@ -30,30 +30,54 @@ Welcome to the Jungle, Remotive, Remote OK et Jobicy ne demandent aucune clé. L
 ## Installation sur le VPS
 
 ```bash
-# 1. Copier le projet sur le VPS (depuis ta machine)
-scp -r send_notif_cv user@ton-vps:~/
+# 1. Récupérer le projet
+git clone git@github.com:pintokev/send_notif_cv.git
+cd send_notif_cv
 
-# 2. Sur le VPS
-cd ~/send_notif_cv
+# 2. Réglages communs (clés API, SMTP, sources…)
 cp .env.example .env
-nano .env                     # remplir les clés, la ville, le SMTP…
+nano .env
 
-mkdir -p data
-cp /chemin/vers/ton_cv.pdf data/cv.pdf
-sudo chown -R 1000:1000 data  # le conteneur tourne avec l'utilisateur 1000
+# 3. Ton CV (service « principal » du docker-compose.yml)
+mkdir -p data/principal
+cp /chemin/vers/ton_cv.pdf data/principal/cv.pdf
+sudo chown -R 1000:1000 data   # le conteneur tourne avec l'utilisateur 1000
 
-# 3. Vérifier la configuration
+# 4. Vérifier la configuration
 docker compose build
-docker compose run --rm job-alert python -m app test-mail       # mail de test
-docker compose run --rm job-alert python -m app profile         # profil déduit du CV
-docker compose run --rm job-alert python -m app run --dry-run   # recherche sans envoi
+docker compose run --rm principal python -m app test-mail       # mail de test
+docker compose run --rm principal python -m app profile         # profil déduit du CV
+docker compose run --rm principal python -m app run --dry-run   # recherche sans envoi
 
-# 4. Lancer pour de bon (redémarre automatiquement avec le VPS)
+# 5. Lancer pour de bon (redémarre automatiquement avec le VPS)
 docker compose up -d
 docker compose logs -f
 ```
 
 Le conteneur reste actif et déclenche la recherche chaque jour à `RUN_AT` (21:00, heure de Paris par défaut). Si le VPS est éteint à l'heure prévue, la recherche du jour est sautée ; les offres seront rattrapées le lendemain grâce à la fenêtre `MAX_DAYS_OLD` de 2 jours.
+
+Pour que tout redémarre avec le VPS, Docker doit être lancé au démarrage (`sudo systemctl enable docker`). Utilise ensuite toujours `docker compose up -d` : après un `docker compose stop` ou `down`, le conteneur ne repart pas tout seul.
+
+## Plusieurs CV
+
+Chaque CV tourne dans son propre conteneur, avec son destinataire, ses réglages et son historique :
+
+```
+.env                    réglages communs (clés API, SMTP…)
+profils/<nom>.env       réglages propres à un CV : ils écrasent ceux de .env
+data/<nom>/cv.pdf       le CV, avec son historique et son cache
+```
+
+Pour ajouter un CV, par exemple « alice » :
+
+1. Dans `docker-compose.yml`, décommente le bloc `deuxieme` et remplace `deuxieme` par `alice` partout.
+2. Crée ses réglages : `cp profils/exemple.env profils/alice.env`, puis renseigne au minimum `MAIL_TO`.
+3. Dépose son CV : `mkdir -p data/alice && cp cv_alice.pdf data/alice/cv.pdf && sudo chown -R 1000:1000 data`. Crée bien le dossier toi-même : sinon Docker le crée au nom de `root` et le conteneur ne pourra pas y écrire.
+4. Vérifie avec `docker compose run --rm alice python -m app run --dry-run`, puis lance `docker compose up -d`.
+
+Dans les commandes, remplace `principal` par le nom du profil visé. `docker compose up -d` et `docker compose logs -f` agissent sur tous les CV à la fois.
+
+Le quota gratuit de SerpApi (250 recherches par mois) est partagé entre tous les CV : avec 2 CV, mets `GOOGLEJOBS_SEARCHES_PER_RUN=4` dans chaque profil. Les profils (`profils/*.env`) ne sont pas envoyés sur GitHub, sauf `profils/exemple.env`.
 
 ## Commandes
 
@@ -61,22 +85,22 @@ Le conteneur reste actif et déclenche la recherche chaque jour à `RUN_AT` (21:
 |---|---|
 | `python -m app schedule` | Mode par défaut du conteneur : tourne en continu, lance la recherche chaque jour |
 | `python -m app run` | Lance une recherche et envoie le mail immédiatement |
-| `python -m app run --dry-run` | Lance une recherche sans envoyer de mail : affiche le résultat et écrit `data/last_email.html` |
+| `python -m app run --dry-run` | Lance une recherche sans envoyer de mail : affiche le résultat et écrit `data/<profil>/last_email.html` |
 | `python -m app profile [--refresh]` | Affiche le profil, les requêtes et les mots-clés déduits du CV (`--refresh` force une nouvelle analyse) |
 | `python -m app test-mail` | Envoie un mail de test |
 
-Ajoute `-v` pour des logs détaillés (dont la consommation de tokens). Avec Docker : `docker compose run --rm job-alert python -m app <commande>`.
+Ajoute `-v` pour des logs détaillés (dont la consommation de tokens). Avec Docker : `docker compose run --rm principal python -m app <commande>` (remplace `principal` par le nom du profil).
 
 ## Réglages utiles
 
-Tous les réglages sont dans `.env` (voir `.env.example`, chaque variable y est commentée).
+Les réglages sont dans `.env` (voir `.env.example`, chaque variable y est commentée), éventuellement redéfinis par CV dans `profils/<nom>.env`.
 
 - **Résultats pas assez pertinents** : vérifie `python -m app profile`, puis ajuste `SEARCH_QUERIES`, `EXTRA_KEYWORDS`, `EXCLUDE_KEYWORDS`, ou décris tes critères dans `CANDIDATE_PREFERENCES` (ex. « CDI uniquement, salaire > 45 k€, pas de poste managérial »). Claude en tient compte dans la note.
 - **Entreprises qui t'intéressent particulièrement** : `TARGET_COMPANIES=L'Oréal,LVMH,Decathlon`. Claude va chercher chaque jour sur leur site carrière, et leurs offres venant de toutes les sources sont prioritaires et marquées d'une ⭐ dans le mail.
 - **Trop ou pas assez d'offres dans le mail** : `MIN_SCORE` et `MAX_RESULTS`.
-- **Mise à jour du CV** : remplace `data/cv.pdf`. Il sera réanalysé automatiquement à la prochaine exécution.
+- **Mise à jour du CV** : remplace `data/<profil>/cv.pdf`. Il sera réanalysé automatiquement à la prochaine exécution.
 - **Changer l'heure** : `RUN_AT=08:30`, puis `docker compose up -d` pour appliquer.
-- **Après une modification du `.env`** : `docker compose up -d` (le conteneur est recréé).
+- **Après une modification du `.env` ou d'un profil** : `docker compose up -d` (les conteneurs concernés sont recréés).
 
 ## Coût
 
@@ -109,8 +133,9 @@ app/
   sources/         un fichier par source (sites d'offres, Google Jobs, sites carrière)
   prefilter.py     tri gratuit par mots-clés
   scorer.py        notation des offres par Claude
-  storage.py       historique SQLite (data/jobs.sqlite3)
+  storage.py       historique SQLite (data/<profil>/jobs.sqlite3)
   mailer.py        composition et envoi du mail
   templates/       modèle HTML du mail
-data/              CV, cache du profil, base SQLite (volume Docker)
+profils/           réglages propres à chaque CV (exemple.env fourni)
+data/<profil>/     CV, cache du profil, base SQLite (volume Docker)
 ```

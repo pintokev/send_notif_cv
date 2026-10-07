@@ -1,13 +1,35 @@
+# Un service par CV. Chaque service :
+#   - lit les réglages communs dans .env, puis ceux de son profil dans profils/<nom>.env
+#     (les valeurs du profil écrasent celles de .env) ;
+#   - a son propre dossier data/<nom>/ (CV, historique des offres, cache du profil).
+# Pour ajouter un CV : dupliquer le bloc « principal » en changeant le nom partout.
+
+x-job-alert: &job-alert
+  build: .
+  image: job-alert
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "5m"
+      max-file: "3"
+
 services:
-  job-alert:
-    build: .
-    container_name: job-alert
-    env_file: .env
+  principal:
+    <<: *job-alert
+    container_name: job-alert-principal
+    env_file:
+      - path: .env
+      - path: profils/principal.env
+        required: false
     volumes:
-      - ./data:/data
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "3"
+      - ./data/principal:/data
+
+  # deuxieme:
+  #   <<: *job-alert
+  #   container_name: job-alert-deuxieme
+  #   env_file:
+  #     - path: .env
+  #     - path: profils/deuxieme.env
+  #   volumes:
+  #     - ./data/deuxieme:/data
