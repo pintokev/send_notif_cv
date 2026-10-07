@@ -1,0 +1,7 @@
+anthropic>=1.12,<2
+httpx>=0.28,<1
+pypdf>=6,<7
+apscheduler>=3.11,<4
+jinja2>=3.1,<4
+python-dotenv>=1,<2
+tzdata

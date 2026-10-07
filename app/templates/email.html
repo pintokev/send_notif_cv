@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2933;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f5f7;">
+<tr><td align="center" style="padding:24px 12px;">
+<table role="presentation" width="640" cellspacing="0" cellpadding="0" style="max-width:640px;width:100%;">
+
+  <tr><td style="padding:0 4px 16px;">
+    <h1 style="margin:0;font-size:22px;">{{ title }}</h1>
+    <p style="margin:6px 0 0;color:#52606d;font-size:14px;">{{ subtitle }}</p>
+  </td></tr>
+
+  {% for item in jobs %}
+  {% set job = item.job %}
+  <tr><td style="padding:0 0 12px;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#ffffff;border-radius:10px;border:1px solid #e4e7eb;">
+    <tr><td style="padding:16px 18px;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>
+        <td style="vertical-align:top;">
+          <a href="{{ job.url }}" style="font-size:16px;font-weight:600;color:#1a56db;text-decoration:none;">{{ job.title }}</a>
+          <div style="margin-top:4px;font-size:14px;color:#3e4c59;">{% if is_target(job) %}⭐ {% endif %}{{ job.company }}{% if job.location %} · {{ job.location }}{% endif %}</div>
+        </td>
+        <td style="vertical-align:top;text-align:right;width:64px;">
+          <span style="display:inline-block;padding:4px 10px;border-radius:999px;font-weight:700;font-size:14px;color:#ffffff;background:{{ score_color(item.score) }};">{{ item.score }}</span>
+        </td>
+      </tr></table>
+      <p style="margin:10px 0 8px;font-size:14px;line-height:1.45;">{{ item.reason }}</p>
+      <div style="font-size:12px;color:#7b8794;">
+        {{ source_labels.get(job.source, job.source) }}{% if job.origin %} (via {{ job.origin }}){% endif %}
+        {% if job.published_at %} · publiée le {{ job.published_at.strftime('%d/%m/%Y') }}{% endif %}
+        {% if job.contract %} · {{ job.contract }}{% endif %}
+        {% if job.salary %} · {{ job.salary }}{% endif %}
+      </div>
+    </td></tr>
+    </table>
+  </td></tr>
+  {% endfor %}
+
+  {% if not jobs %}
+  <tr><td style="padding:18px;background:#ffffff;border-radius:10px;border:1px solid #e4e7eb;font-size:14px;">
+    Aucune nouvelle offre ne dépasse le score minimum de {{ min_score }} aujourd'hui.
+  </td></tr>
+  {% endif %}
+
+  <tr><td style="padding:16px 4px 0;font-size:12px;color:#7b8794;line-height:1.5;">
+    Recherches : {{ queries | join(', ') }}<br>
+    Sources : {% for name, state in status.items() %}{{ source_labels.get(name, name) }} ({{ state }}){% if not loop.last %}, {% endif %}{% endfor %}<br>
+    {{ stats }}
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>
