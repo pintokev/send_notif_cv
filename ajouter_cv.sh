@@ -155,11 +155,18 @@ confirmer "Créer cette personne ?" o || { echo "Annulé, rien n'a été modifi�
 # ─── Création ──────────────────────────────────────────────────────────
 crees=()
 annuler() {
-    printf '\033[31m✘ Échec : annulation des modifications\033[0m\n' >&2
-    for f in "${crees[@]}"; do rm -rf "$f"; done
+    local ligne=$1 commande=$2
+    trap - ERR
+    set +e
+    printf '\033[31m✘ Échec ligne %s : %s\033[0m\n' "$ligne" "$commande" >&2
+    printf '\033[31m  Annulation des modifications…\033[0m\n' >&2
+    for f in "${crees[@]}"; do
+        rm -rf "$f" 2>/dev/null || sudo rm -rf "$f"
+    done
     [[ -f $OVERRIDE.bak ]] && mv "$OVERRIDE.bak" "$OVERRIDE"
+    exit 1
 }
-trap annuler ERR
+trap 'annuler "$LINENO" "$BASH_COMMAND"' ERR
 
 # 1. CV
 mkdir -p "data/$nom"
@@ -224,7 +231,15 @@ cat >> "$OVERRIDE" <<EOF
         max-size: "5m"
         max-file: "3"
 EOF
-docker compose config --services 2>/dev/null | grep -qx "$nom"
+# Vérifie que Docker Compose accepte la nouvelle configuration (affiche son erreur sinon)
+if ! services_apres=$(docker compose config --services 2>&1); then
+    printf '%s\n' "$services_apres" >&2
+    false
+fi
+if ! grep -qx "$nom" <<<"$services_apres"; then
+    printf 'Docker Compose ne voit pas le service « %s ». Services vus :\n%s\n' "$nom" "$services_apres" >&2
+    false
+fi
 rm -f "$OVERRIDE.bak"
 trap - ERR
 ok "Conteneur « job-alert-$nom » déclaré dans $OVERRIDE"
