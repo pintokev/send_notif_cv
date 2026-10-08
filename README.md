@@ -103,10 +103,31 @@ profils/<nom>.env       réglages propres à un CV : ils écrasent ceux de .env
 data/<nom>/cv.pdf       le CV, avec son historique et son cache
 ```
 
-Pour ajouter un CV, par exemple « alice » :
+### Ajouter une personne avec le script (recommandé)
 
-1. Dans `docker-compose.yml`, décommente le bloc `deuxieme` et remplace `deuxieme` par `alice` partout.
-2. Crée ses réglages : `cp profils/exemple.env profils/alice.env`, puis renseigne au minimum `MAIL_TO`.
+Depuis le dossier du projet, sur le serveur :
+
+```bash
+./ajouter_cv.sh
+```
+
+Le script pose les questions une par une : nom, chemin du CV (PDF), adresse mail, ville et rayon, télétravail, critères, mots exclus, entreprises cibles, heure d'envoi, score minimum, nombre d'offres. Il affiche ensuite un récapitulatif et, après confirmation :
+
+1. copie le CV dans `data/<nom>/cv.pdf` et donne les droits au conteneur ;
+2. crée `profils/<nom>.env`. Tous les réglages personnels y sont écrits, même vides, pour que la personne n'hérite jamais des critères d'une autre via le `.env` commun ;
+3. déclare son conteneur `job-alert-<nom>` dans `docker-compose.override.yml`. Docker Compose lit ce fichier automatiquement en plus de `docker-compose.yml`, et il est ignoré par git : pas de conflit au `git pull`, et la liste des personnes reste privée ;
+4. propose un test sans envoi de mail, puis démarre l'envoi quotidien.
+
+Il calcule aussi le nombre de recherches Google Jobs par jour pour rester dans le quota gratuit de SerpApi, partagé entre toutes les personnes. Pense à reporter cette valeur dans les profils existants, comme il te l'indique à la fin.
+
+Le CV doit d'abord être présent sur le serveur. Depuis ta machine : `scp cv.pdf user@ip-du-serveur:~/` (sans oublier les deux-points), puis indique `~/cv.pdf` au script.
+
+Pour **modifier** une personne : `nano profils/<nom>.env`, puis `docker compose up -d <nom>`. Pour la **supprimer** : `docker compose rm -sf <nom>`, retire son bloc de `docker-compose.override.yml`, puis supprime `profils/<nom>.env` et `data/<nom>/`.
+
+### Ajouter une personne à la main
+
+1. Dans `docker-compose.yml`, décommente le bloc `deuxieme` et remplace `deuxieme` par le nom choisi (ex. `alice`) partout.
+2. Crée ses réglages : `cp profils/exemple.env profils/alice.env`, puis renseigne au minimum `MAIL_TO`, et redéfinis (ou vide) les réglages personnels du `.env` : `CANDIDATE_PREFERENCES`, `TARGET_COMPANIES`, `LOCATION_CITY`, `EXCLUDE_KEYWORDS`.
 3. Dépose son CV : `mkdir -p data/alice && cp cv_alice.pdf data/alice/cv.pdf && sudo chown -R 1000:1000 data`. Crée bien le dossier toi-même : sinon Docker le crée au nom de `root` et le conteneur ne pourra pas y écrire.
 4. Vérifie avec `docker compose run --rm alice python -m app run --dry-run`, puis lance `docker compose up -d`.
 
@@ -174,6 +195,7 @@ app/
   storage.py       historique SQLite (data/<profil>/jobs.sqlite3)
   mailer.py        composition et envoi du mail
   templates/       modèle HTML du mail
+ajouter_cv.sh      ajout interactif d'une personne (CV + mail)
 profils/           réglages propres à chaque CV (exemple.env fourni)
 data/<profil>/     CV, cache du profil, base SQLite (volume Docker)
 ```

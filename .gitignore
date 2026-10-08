@@ -5,3 +5,5 @@ __pycache__/
 data/
 profils/*.env
 !profils/exemple.env
+docker-compose.override.yml
+docker-compose.override.yml.bak

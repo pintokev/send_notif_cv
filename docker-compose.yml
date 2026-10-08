@@ -2,7 +2,8 @@
 #   - lit les réglages communs dans .env, puis ceux de son profil dans profils/<nom>.env
 #     (les valeurs du profil écrasent celles de .env) ;
 #   - a son propre dossier data/<nom>/ (CV, historique des offres, cache du profil).
-# Pour ajouter un CV : dupliquer le bloc « principal » en changeant le nom partout.
+# Pour ajouter une personne : ./ajouter_cv.sh (recommandé), qui la déclare dans
+# docker-compose.override.yml ; ou dupliquer ici le bloc « principal » en changeant le nom partout.
 
 x-job-alert: &job-alert
   build: .
