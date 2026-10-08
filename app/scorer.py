@@ -100,7 +100,12 @@ def score_jobs(jobs: list[Job], profile: Profile, settings: Settings) -> list[Sc
         )
         try:
             data = structured_call(
-                model=settings.claude_model, system=system, content=content, schema=SCORE_SCHEMA, effort="low"
+                backend=settings.claude_backend,
+                model=settings.claude_model,
+                system=system,
+                content=content,
+                schema=SCORE_SCHEMA,
+                effort="low",
             )
         except Exception:
             log.exception("Échec de la notation d'un lot de %d offres", len(batch))

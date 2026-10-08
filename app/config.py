@@ -38,6 +38,8 @@ def _list(name: str, default: list[str] | None = None) -> list[str]:
 class Settings:
     # Claude
     claude_model: str = "claude-opus-5-5"
+    # « api » (clé API, facturée à l'usage) ou « subscription » (abonnement Claude via Claude Code)
+    claude_backend: str = "api"
 
     # CV et profil
     cv_path: Path = Path("/data/cv.pdf")
@@ -100,12 +102,23 @@ class Settings:
         return int(hour), int(minute or 0)
 
 
+def _claude_backend() -> str:
+    """CLAUDE_BACKEND=auto (défaut) : la clé API si elle est renseignée, sinon l'abonnement."""
+    backend = _str("CLAUDE_BACKEND", "auto").lower()
+    if backend in {"api", "subscription"}:
+        return backend
+    if backend != "auto":
+        raise ValueError(f"CLAUDE_BACKEND invalide : {backend!r} (auto, api ou subscription)")
+    return "api" if _str("ANTHROPIC_API_KEY") else "subscription"
+
+
 def load_settings() -> Settings:
     load_dotenv()
     data_dir = Path(_str("DATA_DIR", "/data"))
     smtp_user = _str("SMTP_USER")
     return Settings(
         claude_model=_str("CLAUDE_MODEL", "claude-opus-5-5"),
+        claude_backend=_claude_backend(),
         cv_path=Path(_str("CV_PATH", str(data_dir / "cv.pdf"))),
         data_dir=data_dir,
         search_queries=_list("SEARCH_QUERIES"),

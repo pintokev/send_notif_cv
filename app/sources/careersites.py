@@ -42,6 +42,25 @@ Réponds uniquement avec un objet JSON de cette forme, sans texte autour :
 {{"offers": [{{"title": "...", "location": "...", "url": "...", "published": "AAAA-MM-JJ ou vide", "contract": "CDI, CDD, stage… ou vide", "summary": "3 à 5 phrases sur les missions et le profil recherché"}}]}}"""
 
 
+OFFER_FIELDS = ["title", "location", "url", "published", "contract", "summary"]
+OFFERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "offers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {field: {"type": "string"} for field in OFFER_FIELDS},
+                "required": OFFER_FIELDS,
+                "additionalProperties": False,
+            },
+        }
+    },
+    "required": ["offers"],
+    "additionalProperties": False,
+}
+
+
 def _url_found(url: str, sources_text: str) -> bool:
     if not url.startswith("http"):
         return False
@@ -99,12 +118,14 @@ class CareerSitesSource(Source):
             location["city"] = s.city
         try:
             research = web_research(
+                backend=s.claude_backend,
                 model=s.claude_model,
                 system=SYSTEM,
                 prompt=prompt,
                 max_searches=s.career_searches_per_company,
                 max_fetches=s.career_searches_per_company + 1,
                 user_location=location,
+                schema=OFFERS_SCHEMA,
             )
             offers = extract_json(research.text).get("offers", [])
         except Exception:
@@ -130,16 +151,20 @@ class CareerSitesSource(Source):
             )
             if self.is_recent(job.published_at):
                 jobs.append(job)
-        cost = research.estimated_cost
+        cost = research.cost_usd
         if cost is not None:
             self._costs.append(cost)
+            usage = f"{research.input_tokens // 1000}k tokens lus, ≈ {cost:.2f} $"
+        elif s.claude_backend == "subscription":
+            usage = "inclus dans l'abonnement"
+        else:
+            usage = f"{research.input_tokens // 1000}k tokens lus"
         log.info(
-            "%s : %d offres trouvées (%d recherches web, %dk tokens lus%s%s)",
+            "%s : %d offres trouvées (%d recherches web, %s%s)",
             company,
             len(jobs),
             research.searches,
-            research.input_tokens // 1000,
-            f", ≈ {cost:.2f} $" if cost is not None else "",
+            usage,
             f", {rejected} écartées car lien non vérifiable" if rejected else "",
         )
         return jobs

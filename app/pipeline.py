@@ -19,6 +19,10 @@ log = logging.getLogger(__name__)
 
 def run(settings: Settings, dry_run: bool = False) -> None:
     started = time.monotonic()
+    if settings.claude_backend == "subscription":
+        log.info("Claude : via ton abonnement (Claude Code), modèle %s", settings.claude_model)
+    else:
+        log.info("Claude : via l'API (clé API), modèle %s", settings.claude_model)
     profile = load_profile(settings)
     log.info("Requêtes : %s", ", ".join(profile.search_queries))
 

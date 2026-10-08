@@ -1,4 +1,8 @@
-"""Appels à l'API Claude avec sortie JSON structurée."""
+"""Appels à Claude avec sortie JSON structurée.
+
+Deux modes (réglage CLAUDE_BACKEND) : « api » passe par l'API Anthropic avec une clé
+API ; « subscription » passe par Claude Code et un abonnement Claude (voir claude_code.py).
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,8 @@ from functools import lru_cache
 from typing import Any
 
 import anthropic
+
+from . import claude_code
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +35,7 @@ def _client() -> anthropic.Anthropic:
 
 def structured_call(
     *,
+    backend: str,
     model: str,
     system: str,
     content: list[dict] | str,
@@ -37,6 +44,12 @@ def structured_call(
     max_tokens: int = 16000,
 ) -> Any:
     """Envoie une requête et renvoie le JSON validé par le schéma."""
+    if backend == "subscription":
+        try:
+            return claude_code.structured_call(model=model, system=system, content=content, schema=schema, effort=effort)
+        except claude_code.ClaudeCodeError as exc:
+            raise LLMError(str(exc)) from exc
+
     kwargs: dict[str, Any] = {}
     if model in _FALLBACK_MODELS:
         kwargs = {"betas": [_FALLBACK_BETA], "fallbacks": "default"}
@@ -85,29 +98,44 @@ class WebResearch:
     text: str  # réponse finale de Claude
     sources_text: str  # contenu brut des résultats de recherche et des pages lues
     searches: int
-    input_tokens: int
-    output_tokens: int
-    model: str
+    input_tokens: int = 0
+    cost_usd: float | None = None  # None : tarif inconnu, ou inclus dans l'abonnement
 
-    @property
-    def estimated_cost(self) -> float | None:
-        """Coût approximatif en $ (None si le tarif du modèle est inconnu)."""
-        if self.model not in _PRICES:
-            return None
-        price_in, price_out = _PRICES[self.model]
-        return (self.input_tokens * price_in + self.output_tokens * price_out) / 1e6 + self.searches * _SEARCH_PRICE
+
+def _estimated_cost(model: str, input_tokens: int, output_tokens: int, searches: int) -> float | None:
+    """Coût approximatif en $ d'une recherche via l'API (None si le tarif du modèle est inconnu)."""
+    if model not in _PRICES:
+        return None
+    price_in, price_out = _PRICES[model]
+    return (input_tokens * price_in + output_tokens * price_out) / 1e6 + searches * _SEARCH_PRICE
 
 
 def web_research(
     *,
+    backend: str,
     model: str,
     system: str,
     prompt: str,
     max_searches: int,
     max_fetches: int,
     user_location: dict | None = None,
+    schema: dict | None = None,
 ) -> WebResearch:
-    """Laisse Claude chercher sur le web (recherche + lecture de pages) et renvoie sa réponse."""
+    """Laisse Claude chercher sur le web (recherche + lecture de pages) et renvoie sa réponse.
+
+    `schema` n'est utilisé qu'en mode abonnement : via l'API, les citations automatiques
+    de la recherche web sont incompatibles avec la sortie structurée.
+    """
+    if backend == "subscription":
+        try:
+            text, sources_text, searches = claude_code.web_research(
+                model=model, system=system, prompt=prompt, max_searches=max_searches,
+                max_fetches=max_fetches, schema=schema,
+            )
+        except claude_code.ClaudeCodeError as exc:
+            raise LLMError(str(exc)) from exc
+        return WebResearch(text=text, sources_text=sources_text, searches=searches)
+
     dynamic = model.startswith(_DYNAMIC_FILTERING_PREFIXES)
     search_tool: dict[str, Any] = {
         "type": "web_search_20260209" if dynamic else "web_search_20250305",
@@ -168,8 +196,7 @@ def web_research(
         sources_text="\n".join(source_parts),
         searches=searches,
         input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        model=model,
+        cost_usd=_estimated_cost(model, input_tokens, output_tokens, searches),
     )
 
 

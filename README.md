@@ -19,13 +19,48 @@ Une offre n'est jamais envoyée deux fois. Les bonnes offres qui n'ont pas trouv
 
 | Quoi | Obligatoire | Où l'obtenir |
 |---|---|---|
-| Clé API Claude | oui | https://platform.claude.com → API Keys |
+| Clé API Claude **ou** abonnement Claude (Pro/Max) | oui, l'un des deux | voir [Clé API ou abonnement Claude](#clé-api-ou-abonnement-claude) |
 | Compte SMTP | oui | Gmail (mot de passe d'application : https://myaccount.google.com/apppasswords), OVH, Brevo… |
 | Identifiants France Travail | conseillé | https://francetravail.io → « Créer une application » → ajouter l'API **Offres d'emploi v2** |
 | Clé Adzuna | conseillé | https://developer.adzuna.com → inscription gratuite |
 | Clé SerpApi (Google Jobs) | conseillé | https://serpapi.com → inscription gratuite (250 recherches/mois) |
 
-Welcome to the Jungle, Remotive, Remote OK et Jobicy ne demandent aucune clé. La recherche sur les sites carrière utilise ta clé Claude et s'active dès que `TARGET_COMPANIES` est rempli. Une source sans identifiants est simplement ignorée.
+Welcome to the Jungle, Remotive, Remote OK et Jobicy ne demandent aucune clé. La recherche sur les sites carrière utilise Claude (clé API ou abonnement) et s'active dès que `TARGET_COMPANIES` est rempli. Une source sans identifiants est simplement ignorée.
+
+## Clé API ou abonnement Claude
+
+L'appli a besoin de Claude pour trois tâches : analyser le CV, noter les offres et chercher sur les sites carrière. Deux façons de s'y connecter :
+
+| | Clé API | Abonnement Claude (Pro / Max) |
+|---|---|---|
+| Ce qu'il faut | Une clé sur https://platform.claude.com → API Keys | Un abonnement Claude, et Claude Code sur une machine pour générer un jeton |
+| Dans le `.env` | `ANTHROPIC_API_KEY=sk-ant-…` | `ANTHROPIC_API_KEY=` (vide) et `CLAUDE_CODE_OAUTH_TOKEN=…` |
+| Facturation | À l'usage (voir [Coût](#coût)) | Incluse dans l'abonnement, dans la limite de ses quotas |
+| Comment l'appli appelle Claude | Directement via l'API Anthropic | Via Claude Code, installé dans l'image Docker, en mode non interactif |
+
+**Choix automatique** (`CLAUDE_BACKEND=auto`, par défaut) : si `ANTHROPIC_API_KEY` est renseignée, l'appli passe par l'API ; sinon, par l'abonnement. Pour forcer un mode : `CLAUDE_BACKEND=api` ou `CLAUDE_BACKEND=subscription`. Au début de chaque exécution, les logs indiquent le mode utilisé (`Claude : via l'API…` ou `Claude : via ton abonnement…`).
+
+### Utiliser son abonnement
+
+1. Sur une machine où Claude Code est installé et connecté à ton abonnement (ton ordinateur, par exemple), lance :
+   ```bash
+   claude setup-token
+   ```
+   Suis les instructions : la commande affiche un jeton longue durée lié à ton abonnement.
+2. Dans le `.env` du serveur :
+   ```env
+   ANTHROPIC_API_KEY=
+   CLAUDE_CODE_OAUTH_TOKEN=le_jeton_affiché
+   ```
+3. Vérifie avec `docker compose run --rm principal python -m app run --dry-run`. Les logs doivent afficher `Claude : via ton abonnement (Claude Code)`.
+
+Ce jeton donne accès à ton abonnement : garde-le secret, comme une clé API. Il reste dans le `.env`, qui n'est jamais envoyé sur GitHub.
+
+**À savoir avant de choisir l'abonnement :**
+- **Quotas partagés** : les exécutions consomment les mêmes limites d'utilisation que ton usage personnel de Claude (Claude Code, claude.ai). Une exécution complète (CV, environ 60 offres notées, recherche sur les sites carrière) peut en prendre une part notable, surtout avec Opus et beaucoup d'entreprises cibles. Si la limite est atteinte, l'exécution échoue et un mail d'alerte est envoyé (`NOTIFY_ERRORS`).
+- **Conditions d'utilisation** : un abonnement est personnel. L'utiliser pour automatiser ta propre veille relève de ton usage. Pour traiter les CV d'autres personnes (voir [Plusieurs CV](#plusieurs-cv)), vérifie que les conditions d'Anthropic le permettent, ou utilise une clé API.
+- **Recherche sur les sites carrière** : en mode abonnement, Claude Code n'a pas de plafond strict par appel. La limite `CAREER_SEARCHES_PER_COMPANY` lui est donnée comme consigne, et il la respecte en général.
+- **Image Docker** : Claude Code est installé dans l'image (environ 420 Mo au total), même si tu utilises une clé API.
 
 ## Installation sur le VPS
 
@@ -34,7 +69,7 @@ Welcome to the Jungle, Remotive, Remote OK et Jobicy ne demandent aucune clé. L
 git clone git@github.com:pintokev/send_notif_cv.git
 cd send_notif_cv
 
-# 2. Réglages communs (clés API, SMTP, sources…)
+# 2. Réglages communs (clé API Claude ou jeton d'abonnement, SMTP, sources…)
 cp .env.example .env
 nano .env
 
@@ -106,13 +141,14 @@ Les réglages sont dans `.env` (voir `.env.example`, chaque variable y est comme
 
 | Poste | Coût estimé |
 |---|---|
+| **Avec un abonnement Claude** | **rien de plus que l'abonnement** : tout ce qui concerne Claude ci-dessous est inclus, dans la limite des quotas |
 | Analyse du CV | une seule fois, quelques centimes |
 | Notation des offres, `CLAUDE_MODEL=claude-opus-5-5` (défaut) | 0,50 à 1 $ par jour |
 | Notation des offres, `CLAUDE_MODEL=claude-haiku-5-5` | quelques centimes par jour (notation un peu moins fine) |
 | Google Jobs (SerpApi) | gratuit jusqu'à 250 recherches par mois (6 par jour par défaut) |
 | Sites carrière (recherche web Claude) | 10 à 20 centimes par entreprise et par jour : 1 centime par recherche, plus le texte des pages lues |
 
-Ce sont des estimations : la consommation réelle est visible dans la console Anthropic et sur le tableau de bord SerpApi. Pour réduire le coût : baisser `PREFILTER_TOP_K`, `CAREER_SEARCHES_PER_COMPANY` ou le nombre d'entreprises cibles.
+Les lignes Claude ci-dessus concernent le mode clé API. Ce sont des estimations : la consommation réelle est visible dans la console Anthropic et sur le tableau de bord SerpApi. Pour réduire le coût : baisser `PREFILTER_TOP_K`, `CAREER_SEARCHES_PER_COMPANY` ou le nombre d'entreprises cibles.
 
 ## Limites à connaître
 
@@ -130,6 +166,8 @@ app/
   __main__.py      commandes et planificateur
   pipeline.py      enchaînement complet d'une exécution
   candidate.py     lecture du CV et extraction du profil par Claude
+  llm.py           appels à Claude : via l'API (clé API), ou aiguillage vers claude_code.py
+  claude_code.py   appels à Claude via Claude Code (abonnement)
   sources/         un fichier par source (sites d'offres, Google Jobs, sites carrière)
   prefilter.py     tri gratuit par mots-clés
   scorer.py        notation des offres par Claude

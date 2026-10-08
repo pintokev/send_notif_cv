@@ -80,6 +80,7 @@ def load_profile(settings: Settings, refresh: bool = False) -> Profile:
         log.info("Analyse du CV par Claude (%s)…", settings.claude_model)
         cv_text = read_cv_text(pdf_bytes, str(settings.cv_path))
         data = structured_call(
+            backend=settings.claude_backend,
             model=settings.claude_model,
             system="Tu es un recruteur expérimenté qui analyse des CV avec précision.",
             content=[
