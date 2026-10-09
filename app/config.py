@@ -88,7 +88,8 @@ class Settings:
     notify_errors: bool = True
 
     # Planification
-    run_at: str = "21:00"
+    run_at: str = "21:00"  # heure du mail (et de la recherche si search_at est vide)
+    search_at: str = ""  # heure de la recherche, si elle doit avoir lieu plus tôt (ex. la nuit)
     timezone: str = "Europe/Paris"
     run_on_start: bool = False
 
@@ -98,8 +99,19 @@ class Settings:
 
     @property
     def run_hour_minute(self) -> tuple[int, int]:
-        hour, _, minute = self.run_at.partition(":")
-        return int(hour), int(minute or 0)
+        return _hour_minute(self.run_at)
+
+    @property
+    def search_hour_minute(self) -> tuple[int, int] | None:
+        """Heure de la recherche séparée de l'envoi, ou None si les deux ont lieu ensemble."""
+        if not self.search_at or _hour_minute(self.search_at) == self.run_hour_minute:
+            return None
+        return _hour_minute(self.search_at)
+
+
+def _hour_minute(value: str) -> tuple[int, int]:
+    hour, _, minute = value.partition(":")
+    return int(hour), int(minute or 0)
 
 
 def _claude_backend() -> str:
@@ -153,6 +165,7 @@ def load_settings() -> Settings:
         send_if_empty=_bool("SEND_IF_EMPTY", True),
         notify_errors=_bool("NOTIFY_ERRORS", True),
         run_at=_str("RUN_AT", "21:00"),
+        search_at=_str("SEARCH_AT"),
         timezone=_str("TZ", "Europe/Paris"),
         run_on_start=_bool("RUN_ON_START", False),
     )

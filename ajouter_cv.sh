@@ -136,6 +136,21 @@ while true; do
     [[ $REPONSE =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] && { heure=$REPONSE; break; }
     echo "  → format attendu : HH:MM (ex. 08:30)."
 done
+echo "La recherche peut avoir lieu plus tôt que le mail, par exemple la nuit : les offres notées attendent l'heure du mail."
+while true; do
+    demander "Heure de la recherche (HH:MM, ex. 03:00 ; vide = au moment du mail)" ""
+    if [[ -z $REPONSE || $REPONSE =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+        heure_recherche=$REPONSE
+        [[ $heure_recherche == "$heure" ]] && heure_recherche=""
+        break
+    fi
+    echo "  → format attendu : HH:MM (ex. 03:00), ou vide."
+done
+if [[ -n $heure_recherche ]]; then
+    horaire="recherche à $heure_recherche, mail à $heure"
+else
+    horaire="à $heure"
+fi
 while true; do
     demander "Score minimum (0-100) pour qu'une offre figure dans le mail" "60"
     [[ $REPONSE =~ ^[0-9]+$ ]] && (( REPONSE <= 100 )) && { score=$REPONSE; break; }
@@ -183,7 +198,7 @@ cat <<EOF
   Critères           : ${preferences:-aucun}
   Mots exclus        : ${exclusions:-aucun}
   Entreprises cibles : ${entreprises:-aucune}
-  Envoi              : tous les jours à $heure, score ≥ $score, $max_offres offres max
+  Envoi              : tous les jours $horaire, score ≥ $score, $max_offres offres max
   Sources            : $sources
 EOF
 if $google; then
@@ -234,7 +249,9 @@ TARGET_COMPANIES=$entreprises
 SEARCH_QUERIES=
 EXTRA_KEYWORDS=
 
+# Heure du mail, et heure de la recherche si elle a lieu plus tôt (vide = au moment du mail)
 RUN_AT=$heure
+SEARCH_AT=$heure_recherche
 MIN_SCORE=$score
 MAX_RESULTS=$max_offres
 
@@ -299,11 +316,11 @@ case $REPONSE in
 esac
 
 echo
-echo "Envoi automatique : la recherche peut tourner toute seule tous les jours à $heure,"
+echo "Envoi automatique : la recherche peut tourner toute seule tous les jours ($horaire),"
 echo "tant que cette machine et Docker restent allumés. Sinon, lance-la quand tu veux avec ./lancer.sh"
 if confirmer "Activer l'envoi automatique quotidien pour $nom ?" o; then
     docker compose up -d "$nom"
-    ok "« $nom » recevra ses offres tous les jours à $heure."
+    ok "« $nom » recevra ses offres tous les jours ($horaire)."
 else
     echo "Pour l'activer plus tard : ./lancer.sh $nom"
 fi

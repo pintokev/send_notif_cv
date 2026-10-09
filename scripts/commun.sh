@@ -89,11 +89,27 @@ verifier_docker() {
     docker compose version >/dev/null 2>&1 || erreur "Docker Compose est introuvable (commande « docker compose »)."
 }
 
-# Construit l'image Docker si elle n'existe pas encore
+# Construit l'image Docker, ou la reconstruit si le code a changé depuis (après un git pull).
+# Le fichier témoin .image-construite date la dernière construction. Les envois automatiques
+# actifs passent ensuite à la nouvelle version.
 construire_image() {
-    if ! docker image inspect job-alert >/dev/null 2>&1; then
+    local actifs
+    if docker image inspect job-alert >/dev/null 2>&1 && [[ -f .image-construite ]] \
+        && [[ -z $(find app Dockerfile requirements.txt -newer .image-construite -print -quit) ]]; then
+        return 0
+    fi
+    if docker image inspect job-alert >/dev/null 2>&1; then
+        info "Le code a changé : mise à jour de l'image Docker…"
+    else
         info "Construction de l'image Docker (quelques minutes la première fois)…"
-        docker compose build
+    fi
+    docker compose build
+    touch .image-construite
+    actifs=$(docker compose ps --status running --services 2>/dev/null || true)
+    if [[ -n $actifs ]]; then
+        # Recrée les conteneurs actifs avec la nouvelle image (un nom de service par mot)
+        docker compose up -d $actifs
+        ok "Envoi automatique relancé avec la nouvelle version : $(echo $actifs)"
     fi
 }
 

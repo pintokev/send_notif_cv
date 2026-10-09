@@ -4,9 +4,10 @@
 #
 # Usage : ./lancer.sh                 avec des menus
 #         ./lancer.sh <nom>           avec des menus, pour cette personne (« tous » : tous les profils)
-#         ./lancer.sh <nom> <action>  sans question. Actions : envoi, apercu, test-mail,
-#                                     profil, activer [HH:MM], heure HH:MM, arreter
-#                                     (avec « tous », chacun garde son heure)
+#         ./lancer.sh <nom> <action>  sans question. Actions : envoi, apercu, test-mail, profil,
+#                                     activer [mail [recherche]], heure mail [recherche], arreter
+#                                     (heures en HH:MM ; recherche « non » = au moment du mail ;
+#                                     avec « tous », chacun garde ses heures)
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -26,18 +27,44 @@ done <<<"$services"
 
 est_actif() { grep -qx "$1" <<<"$actifs"; }
 
-# heure_de <nom> → heure de l'envoi automatique (profil, sinon .env, sinon 21:00)
+# reglage_de <nom> CLE → valeur du profil, sinon du .env (comme Docker Compose)
+reglage_de() {
+    if grep -q "^$2=" "profils/$1.env" 2>/dev/null; then
+        lire_reglage "profils/$1.env" "$2"
+    else
+        lire_reglage .env "$2"
+    fi
+}
+
+# heure_de <nom> → heure du mail (21:00 par défaut)
 heure_de() {
     local heure
-    heure=$(lire_reglage "profils/$1.env" RUN_AT)
-    heure=${heure:-$(lire_reglage .env RUN_AT)}
+    heure=$(reglage_de "$1" RUN_AT)
     printf '%s' "${heure:-21:00}"
+}
+
+# recherche_de <nom> → heure de la recherche si elle a lieu avant le mail, sinon vide
+recherche_de() {
+    local recherche
+    recherche=$(reglage_de "$1" SEARCH_AT)
+    if [[ $recherche != "$(heure_de "$1")" ]]; then printf '%s' "$recherche"; fi
+}
+
+# horaire_de <nom> → « à 21:00 » ou « recherche à 03:00, mail à 21:00 »
+horaire_de() {
+    local recherche
+    recherche=$(recherche_de "$1")
+    if [[ -n $recherche ]]; then
+        printf 'recherche à %s, mail à %s' "$recherche" "$(heure_de "$1")"
+    else
+        printf 'à %s' "$(heure_de "$1")"
+    fi
 }
 
 # executer <nom> <action> : exécute l'action pour une personne → code de retour 0 si elle a réussi
 executer() {
-    local nom=$1 action=$2 heure
-    heure=$(heure_de "$nom")
+    local nom=$1 action=$2 horaire
+    horaire=$(horaire_de "$nom")
     case $action in
         envoi)
             lancer_recherche "$nom"
@@ -64,9 +91,9 @@ executer() {
         activer | heure)
             if [[ $action == activer ]] || est_actif "$nom"; then
                 docker compose up -d "$nom" || return 1  # recrée le conteneur si l'heure a changé
-                ok "Envoi automatique activé : « $nom » recevra ses offres tous les jours à $heure, tant que Docker tourne."
+                ok "Envoi automatique activé pour « $nom » : tous les jours, $horaire, tant que Docker tourne."
             else
-                ok "Heure enregistrée ($heure). L'envoi automatique n'est pas actif : ./lancer.sh $nom activer"
+                ok "Heures enregistrées ($horaire). L'envoi automatique n'est pas actif : ./lancer.sh $nom activer"
             fi
             ;;
         arreter)
@@ -103,20 +130,21 @@ if [[ $nom == tous ]]; then
             "Lancer une recherche et envoyer le mail" \
             "Lancer une recherche sans envoyer de mail (aperçu)" \
             "Envoyer un mail de test" \
-            "Activer l'envoi automatique quotidien (chacun à son heure)" \
+            "Activer l'envoi automatique quotidien (chacun à ses heures)" \
             "Arrêter l'envoi automatique quotidien"
         actions=(envoi apercu test-mail activer arreter)
         action=${actions[REPONSE - 1]}
     fi
     case $action in
         envoi | apercu | test-mail | profil | activer | arreter) ;;
-        heure) erreur "Pour changer l'heure, choisis un profil : ./lancer.sh <nom> heure HH:MM" ;;
+        heure) erreur "Pour changer les heures, choisis un profil : ./lancer.sh <nom> heure HH:MM [HH:MM]" ;;
         *) erreur "Action inconnue : $action (envoi, apercu, test-mail, profil, activer ou arreter)" ;;
     esac
-    [[ -z ${3:-} ]] || erreur "Avec « tous », chacun garde son heure : ./lancer.sh <nom> $action HH:MM pour en changer."
+    [[ -z ${3:-} ]] || erreur "Avec « tous », chacun garde ses heures : ./lancer.sh <nom> $action HH:MM pour en changer."
 else
     [[ -f data/$nom/cv.pdf ]] || erreur "Pas de CV pour « $nom » : dépose-le dans data/$nom/cv.pdf, ou lance ./installer.sh"
     heure=$(heure_de "$nom")
+    recherche=$(recherche_de "$nom")
     if [[ -z $action ]]; then
         options=(
             "Lancer une recherche et envoyer le mail"
@@ -126,11 +154,11 @@ else
         )
         actions=(envoi apercu test-mail profil)
         if est_actif "$nom"; then
-            options+=("Changer l'heure de l'envoi automatique (actuellement tous les jours à $heure)"
+            options+=("Changer les heures de l'envoi automatique (actuellement tous les jours, $(horaire_de "$nom"))"
                       "Arrêter l'envoi automatique quotidien")
             actions+=(heure arreter)
         else
-            options+=("Activer l'envoi automatique quotidien, à l'heure de ton choix")
+            options+=("Activer l'envoi automatique quotidien, aux heures de ton choix")
             actions+=(activer)
         fi
         echo
@@ -142,19 +170,38 @@ else
         *) erreur "Action inconnue : $action (envoi, apercu, test-mail, profil, activer, heure ou arreter)" ;;
     esac
 
-    # Nouvelle heure de l'envoi automatique : en argument, sinon demandée (Entrée = heure actuelle)
+    # Heures de l'envoi automatique : en arguments, sinon demandées (Entrée = heure actuelle).
+    # Heure de la recherche : « non » (ou vide en argument) = au moment du mail.
     if [[ $action == activer || $action == heure ]]; then
         nouvelle_heure=${3:-}
+        nouvelle_recherche=${4:-}
         if [[ -n $nouvelle_heure && ! $nouvelle_heure =~ $HEURE_REGEX ]]; then
-            erreur "Heure invalide : $nouvelle_heure (format attendu : HH:MM, ex. 08:30)"
+            erreur "Heure du mail invalide : $nouvelle_heure (format attendu : HH:MM, ex. 08:30)"
         fi
-        while [[ ! $nouvelle_heure =~ $HEURE_REGEX ]]; do
-            if [[ -n $nouvelle_heure ]]; then echo "  → format attendu : HH:MM (ex. 08:30)."; fi
-            demander "Heure de l'envoi automatique, tous les jours (HH:MM)" "$heure"
-            nouvelle_heure=$REPONSE
-        done
+        if [[ -n $nouvelle_recherche && $nouvelle_recherche != non && ! $nouvelle_recherche =~ $HEURE_REGEX ]]; then
+            erreur "Heure de recherche invalide : $nouvelle_recherche (HH:MM, ex. 03:00, ou « non »)"
+        fi
+        if [[ -z $nouvelle_heure ]]; then
+            while true; do
+                demander "Heure du mail, tous les jours (HH:MM)" "$heure"
+                [[ $REPONSE =~ $HEURE_REGEX ]] && { nouvelle_heure=$REPONSE; break; }
+                echo "  → format attendu : HH:MM (ex. 08:30)."
+            done
+            echo "La recherche peut avoir lieu plus tôt, par exemple la nuit : les offres notées attendent l'heure du mail."
+            while true; do
+                demander "Heure de la recherche (HH:MM, ex. 03:00 ; « non » = au moment du mail)" "${recherche:-non}"
+                if [[ $REPONSE == non || $REPONSE =~ $HEURE_REGEX ]]; then nouvelle_recherche=$REPONSE; break; fi
+                echo "  → format attendu : HH:MM (ex. 03:00), ou « non »."
+            done
+        elif [[ -z $nouvelle_recherche ]]; then
+            nouvelle_recherche=${recherche:-non}  # heure du mail seule en argument : la recherche ne change pas
+        fi
+        if [[ $nouvelle_recherche == non || $nouvelle_recherche == "$nouvelle_heure" ]]; then nouvelle_recherche=""; fi
         if [[ $nouvelle_heure != "$heure" ]]; then
             ecrire_reglage "profils/$nom.env" RUN_AT "$nouvelle_heure"
+        fi
+        if [[ $nouvelle_recherche != "$recherche" ]]; then
+            ecrire_reglage "profils/$nom.env" SEARCH_AT "$nouvelle_recherche"
         fi
     fi
 fi

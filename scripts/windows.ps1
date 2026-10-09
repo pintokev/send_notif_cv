@@ -9,7 +9,8 @@ param(
     [Parameter(Mandatory = $true)][ValidateSet('installer', 'ajouter', 'lancer')][string]$Commande,
     [string]$Nom = '',
     [string]$Action = '',
-    [string]$Heure = ''
+    [string]$Heure = '',
+    [string]$Recherche = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -142,10 +143,25 @@ function Services-Compose {
     return @($r.Lignes)
 }
 
+# Construit l'image Docker, ou la reconstruit si le code a changé depuis (après une mise à jour).
+# Le fichier témoin .image-construite date la dernière construction. Les envois automatiques
+# actifs passent ensuite à la nouvelle version.
 function Construire-Image {
-    if ((Capturer-Docker image inspect job-alert).Code -ne 0) {
-        Info "Construction de l'image Docker (quelques minutes la première fois)…"
-        if (-not (Lancer-Docker compose build)) { Erreur "La construction de l'image Docker a échoué (voir le message ci-dessus)." }
+    $existe = (Capturer-Docker image inspect job-alert).Code -eq 0
+    if ($existe -and (Test-Path -LiteralPath '.image-construite')) {
+        $construite = (Get-Item -LiteralPath '.image-construite').LastWriteTime
+        $modifies = @(Get-ChildItem -LiteralPath 'app', 'Dockerfile', 'requirements.txt' -Recurse -File |
+            Where-Object { $_.LastWriteTime -gt $construite })
+        if ($modifies.Count -eq 0) { return }
+    }
+    if ($existe) { Info "Le code a changé : mise à jour de l'image Docker…" }
+    else { Info "Construction de l'image Docker (quelques minutes la première fois)…" }
+    if (-not (Lancer-Docker compose build)) { Erreur "La construction de l'image Docker a échoué (voir le message ci-dessus)." }
+    Ecrire-Texte '.image-construite' ''
+    $actifs = @((Capturer-Docker compose ps --status running --services).Lignes)
+    if ($actifs.Count -gt 0) {
+        # Recrée les conteneurs actifs avec la nouvelle image
+        if (Lancer-Docker compose up -d @actifs) { Ok "Envoi automatique relancé avec la nouvelle version : $($actifs -join ' ')" }
     }
 }
 
@@ -441,7 +457,15 @@ function Ajouter-Personne([switch]$Principal) {
     # Envoi
     Write-Host ''
     Info 'Envoi du mail'
-    do { $heure = Demander "Heure d'envoi quotidienne (HH:MM, heure de Paris)" '21:15' } until ($heure -match '^([01][0-9]|2[0-3]):[0-5][0-9]$')
+    do { $heure = Demander "Heure d'envoi quotidienne (HH:MM, heure de Paris)" '21:15' } until ($heure -match $HeureRegex)
+    Write-Host "La recherche peut avoir lieu plus tôt que le mail, par exemple la nuit : les offres notées attendent l'heure du mail."
+    while ($true) {
+        $heureRecherche = Demander 'Heure de la recherche (HH:MM, ex. 03:00 ; vide = au moment du mail)'
+        if (-not $heureRecherche -or $heureRecherche -match $HeureRegex) { break }
+        Write-Host '  → format attendu : HH:MM (ex. 03:00), ou vide.'
+    }
+    if ($heureRecherche -eq $heure) { $heureRecherche = '' }
+    $horaire = if ($heureRecherche) { "recherche à $heureRecherche, mail à $heure" } else { "à $heure" }
     do { $score = Demander "Score minimum (0-100) pour qu'une offre figure dans le mail" '60' } until ($score -match '^[0-9]+$' -and [int]$score -le 100)
     do { $maxOffres = Demander "Nombre maximum d'offres par mail" '15' } until ($maxOffres -match '^[1-9][0-9]*$')
 
@@ -460,7 +484,7 @@ function Ajouter-Personne([switch]$Principal) {
     Write-Host "  Critères           : $(if ($preferences) { $preferences } else { 'aucun' })"
     Write-Host "  Mots exclus        : $(if ($exclusions) { $exclusions } else { 'aucun' })"
     Write-Host "  Entreprises cibles : $(if ($entreprises) { $entreprises } else { 'aucune' })"
-    Write-Host "  Envoi              : tous les jours à $heure, score ≥ $score, $maxOffres offres max"
+    Write-Host "  Envoi              : tous les jours $horaire, score ≥ $score, $maxOffres offres max"
     Write-Host "  Sources            : $sources"
     if ($google) { Write-Host "  Google Jobs        : $recherchesGoogle recherches par jour (quota SerpApi partagé entre $nbGoogle personnes)" }
     Write-Host ''
@@ -495,7 +519,9 @@ TARGET_COMPANIES=$entreprises
 SEARCH_QUERIES=
 EXTRA_KEYWORDS=
 
+# Heure du mail, et heure de la recherche si elle a lieu plus tôt (vide = au moment du mail)
 RUN_AT=$heure
+SEARCH_AT=$heureRecherche
 MIN_SCORE=$score
 MAX_RESULTS=$maxOffres
 
@@ -563,10 +589,10 @@ GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
     elseif ($choix -eq 2) { Lancer-Recherche $nom | Out-Null }
 
     Write-Host ''
-    Write-Host "Envoi automatique : la recherche peut tourner toute seule tous les jours à $heure,"
+    Write-Host "Envoi automatique : la recherche peut tourner toute seule tous les jours ($horaire),"
     Write-Host "tant que cet ordinateur et Docker Desktop restent allumés. Sinon, lance-la quand tu veux avec lancer.bat."
     if (Confirmer "Activer l'envoi automatique quotidien pour $nom ?" 'o') {
-        if (Lancer-Docker compose up -d $nom) { Ok "« $nom » recevra ses offres tous les jours à $heure." }
+        if (Lancer-Docker compose up -d $nom) { Ok "« $nom » recevra ses offres tous les jours ($horaire)." }
     } else {
         Write-Host "Pour l'activer plus tard : lancer.bat"
     }
@@ -580,17 +606,39 @@ GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
 
 # ─── lancer : recherche à la demande ───────────────────────────────────
 
-# Heure-De nom → heure de l'envoi automatique (profil, sinon .env, sinon 21:00)
+# Reglage-De nom CLE → valeur du profil, sinon du .env (comme Docker Compose)
+function Reglage-De([string]$Nom, [string]$Cle) {
+    $profil = "profils\$Nom.env"
+    if ((Test-Path -LiteralPath $profil) -and (Select-String -LiteralPath $profil -Pattern "^$Cle=" -Quiet)) {
+        return (Lire-Reglage $profil $Cle)
+    }
+    return (Lire-Reglage '.env' $Cle)
+}
+
+# Heure-De nom → heure du mail (21:00 par défaut)
 function Heure-De([string]$Nom) {
-    $heure = Lire-Reglage "profils\$Nom.env" RUN_AT
-    if (-not $heure) { $heure = Lire-Reglage '.env' RUN_AT }
+    $heure = Reglage-De $Nom RUN_AT
     if (-not $heure) { $heure = '21:00' }
     return $heure
 }
 
+# Recherche-De nom → heure de la recherche si elle a lieu avant le mail, sinon vide
+function Recherche-De([string]$Nom) {
+    $recherche = Reglage-De $Nom SEARCH_AT
+    if ($recherche -eq (Heure-De $Nom)) { return '' }
+    return $recherche
+}
+
+# Horaire-De nom → « à 21:00 » ou « recherche à 03:00, mail à 21:00 »
+function Horaire-De([string]$Nom) {
+    $recherche = Recherche-De $Nom
+    if ($recherche) { return "recherche à $recherche, mail à $(Heure-De $Nom)" }
+    return "à $(Heure-De $Nom)"
+}
+
 # Executer nom action → $true si l'action a réussi pour cette personne
 function Executer([string]$Nom, [string]$Action, [bool]$Actif) {
-    $heure = Heure-De $Nom
+    $horaire = Horaire-De $Nom
     switch ($Action) {
         'envoi' { return (Lancer-Recherche $Nom) }
         'apercu' { return (Lancer-Recherche $Nom -Apercu) }
@@ -607,9 +655,9 @@ function Executer([string]$Nom, [string]$Action, [bool]$Actif) {
             if ($Action -eq 'activer' -or $Actif) {
                 # Recrée le conteneur si l'heure a changé
                 if (-not (Lancer-Docker compose up -d $Nom)) { return $false }
-                Ok "Envoi automatique activé : « $Nom » recevra ses offres tous les jours à $heure, tant que Docker Desktop tourne."
+                Ok "Envoi automatique activé pour « $Nom » : tous les jours, $horaire, tant que Docker Desktop tourne."
             } else {
-                Ok "Heure enregistrée ($heure). L'envoi automatique n'est pas actif : lancer.bat $Nom activer"
+                Ok "Heures enregistrées ($horaire). L'envoi automatique n'est pas actif : lancer.bat $Nom activer"
             }
             return $true
         }
@@ -621,7 +669,7 @@ function Executer([string]$Nom, [string]$Action, [bool]$Actif) {
     }
 }
 
-function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure) {
+function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure, [string]$NouvelleRecherche) {
     if (-not (Test-Path -LiteralPath '.env')) { Erreur "Rien n'est encore installé : lance d'abord installer.bat." }
     $profils = @(Services-Compose)
     $actifs = @((Capturer-Docker compose ps --status running --services).Lignes)
@@ -648,20 +696,21 @@ function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure) {
                 'Lancer une recherche et envoyer le mail',
                 'Lancer une recherche sans envoyer de mail (aperçu)',
                 'Envoyer un mail de test',
-                "Activer l'envoi automatique quotidien (chacun à son heure)",
+                "Activer l'envoi automatique quotidien (chacun à ses heures)",
                 "Arrêter l'envoi automatique quotidien")
             $Action = @('envoi', 'apercu', 'test-mail', 'activer', 'arreter')[$choix - 1]
         }
-        if ($Action -eq 'heure') { Erreur "Pour changer l'heure, choisis un profil : lancer.bat <nom> heure HH:MM" }
+        if ($Action -eq 'heure') { Erreur "Pour changer les heures, choisis un profil : lancer.bat <nom> heure HH:MM [HH:MM]" }
         if (@('envoi', 'apercu', 'test-mail', 'profil', 'activer', 'arreter') -notcontains $Action) {
             Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer ou arreter)"
         }
-        if ($NouvelleHeure) { Erreur "Avec « tous », chacun garde son heure : lancer.bat <nom> $Action HH:MM pour en changer." }
+        if ($NouvelleHeure) { Erreur "Avec « tous », chacun garde ses heures : lancer.bat <nom> $Action HH:MM pour en changer." }
     } else {
         if (-not (Test-Path -LiteralPath "data\$Nom\cv.pdf")) {
             Erreur "Pas de CV pour « $Nom » : dépose-le dans data\$Nom\cv.pdf, ou lance installer.bat."
         }
         $heure = Heure-De $Nom
+        $recherche = Recherche-De $Nom
         if (-not $Action) {
             $options = @(
                 'Lancer une recherche et envoyer le mail',
@@ -670,10 +719,10 @@ function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure) {
                 'Voir le profil déduit du CV (métier, mots-clés, requêtes)')
             $actions = @('envoi', 'apercu', 'test-mail', 'profil')
             if ($actifs -contains $Nom) {
-                $options += "Changer l'heure de l'envoi automatique (actuellement tous les jours à $heure)", "Arrêter l'envoi automatique quotidien"
+                $options += "Changer les heures de l'envoi automatique (actuellement tous les jours, $(Horaire-De $Nom))", "Arrêter l'envoi automatique quotidien"
                 $actions += 'heure', 'arreter'
             } else {
-                $options += "Activer l'envoi automatique quotidien, à l'heure de ton choix"
+                $options += "Activer l'envoi automatique quotidien, aux heures de ton choix"
                 $actions += 'activer'
             }
             Write-Host ''
@@ -683,16 +732,31 @@ function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure) {
             Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer, heure ou arreter)"
         }
 
-        # Nouvelle heure de l'envoi automatique : en argument, sinon demandée (Entrée = heure actuelle)
+        # Heures de l'envoi automatique : en arguments, sinon demandées (Entrée = heure actuelle).
+        # Heure de la recherche : « non » (ou absente en argument) = au moment du mail.
         if ($Action -eq 'activer' -or $Action -eq 'heure') {
             if ($NouvelleHeure -and $NouvelleHeure -notmatch $HeureRegex) {
-                Erreur "Heure invalide : $NouvelleHeure (format attendu : HH:MM, ex. 08:30)"
+                Erreur "Heure du mail invalide : $NouvelleHeure (format attendu : HH:MM, ex. 08:30)"
             }
-            while ($NouvelleHeure -notmatch $HeureRegex) {
-                if ($NouvelleHeure) { Write-Host '  → format attendu : HH:MM (ex. 08:30).' }
-                $NouvelleHeure = Demander "Heure de l'envoi automatique, tous les jours (HH:MM)" $heure
+            if ($NouvelleRecherche -and $NouvelleRecherche -ne 'non' -and $NouvelleRecherche -notmatch $HeureRegex) {
+                Erreur "Heure de recherche invalide : $NouvelleRecherche (HH:MM, ex. 03:00, ou « non »)"
             }
+            if (-not $NouvelleHeure) {
+                do { $NouvelleHeure = Demander 'Heure du mail, tous les jours (HH:MM)' $heure } until ($NouvelleHeure -match $HeureRegex)
+                Write-Host "La recherche peut avoir lieu plus tôt, par exemple la nuit : les offres notées attendent l'heure du mail."
+                $defaut = if ($recherche) { $recherche } else { 'non' }
+                while ($true) {
+                    $NouvelleRecherche = Demander 'Heure de la recherche (HH:MM, ex. 03:00 ; « non » = au moment du mail)' $defaut
+                    if ($NouvelleRecherche -eq 'non' -or $NouvelleRecherche -match $HeureRegex) { break }
+                    Write-Host '  → format attendu : HH:MM (ex. 03:00), ou « non ».'
+                }
+            } elseif (-not $NouvelleRecherche) {
+                # Heure du mail seule en argument : la recherche ne change pas
+                $NouvelleRecherche = if ($recherche) { $recherche } else { 'non' }
+            }
+            if ($NouvelleRecherche -eq 'non' -or $NouvelleRecherche -eq $NouvelleHeure) { $NouvelleRecherche = '' }
             if ($NouvelleHeure -ne $heure) { Ecrire-Reglage "profils\$Nom.env" RUN_AT $NouvelleHeure }
+            if ($NouvelleRecherche -ne $recherche) { Ecrire-Reglage "profils\$Nom.env" SEARCH_AT $NouvelleRecherche }
         }
     }
 
@@ -731,5 +795,5 @@ function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure) {
 switch ($Commande) {
     'installer' { Installer }
     'ajouter' { Verifier-Docker; Ajouter-Personne }
-    'lancer' { Verifier-Docker; Lancer $Nom $Action $Heure }
+    'lancer' { Verifier-Docker; Lancer $Nom $Action $Heure $Recherche }
 }

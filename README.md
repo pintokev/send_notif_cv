@@ -81,9 +81,13 @@ Il faut seulement [Docker](https://docs.docker.com/engine/install/) sur un serve
 
 Relancé plus tard, il permet de modifier une partie du `.env` (l'ancienne version est gardée dans `.env.bak`) ou d'ajouter une personne.
 
-**`lancer`** déclenche une recherche à la demande, sans attendre l'heure prévue : avec envoi du mail, ou en aperçu, sans envoi (le mail est alors enregistré dans `data/<profil>/last_email.html`, et ouvert dans le navigateur sous Windows et macOS). Il permet aussi d'envoyer un mail de test, de voir le profil déduit du CV, et d'activer l'envoi automatique quotidien à l'heure de ton choix, d'en changer l'heure ou de l'arrêter. Sans question : `./lancer.sh <profil> <action>`, avec l'action `envoi`, `apercu`, `test-mail`, `profil`, `activer [HH:MM]`, `heure HH:MM` ou `arreter`.
+**`lancer`** déclenche une recherche à la demande, sans attendre l'heure prévue : avec envoi du mail, ou en aperçu, sans envoi (le mail est alors enregistré dans `data/<profil>/last_email.html`, et ouvert dans le navigateur sous Windows et macOS). Il permet aussi d'envoyer un mail de test, de voir le profil déduit du CV, et d'activer l'envoi automatique quotidien aux heures de ton choix, d'en changer les heures ou de l'arrêter. Sans question : `./lancer.sh <profil> <action>`, avec l'action `envoi`, `apercu`, `test-mail`, `profil`, `activer [mail [recherche]]`, `heure mail [recherche]` ou `arreter` (heures en `HH:MM`, recherche `non` pour la faire au moment du mail).
 
 Avec plusieurs profils, le choix « Tous les profils » (ou `./lancer.sh tous <action>`) exécute l'action pour chacun, l'un après l'autre, puis affiche un récapitulatif. Un échec n'arrête pas les profils suivants, et un profil sans CV est ignoré. L'envoi automatique y garde l'heure propre à chaque profil.
+
+**Recherche la nuit, mail plus tard** : la recherche peut avoir lieu à une autre heure que le mail, par exemple à 03:00 pour un mail à 08:00. Les offres notées attendent l'heure du mail. `ajouter_cv` et `lancer` demandent les deux heures (réglages `SEARCH_AT` et `RUN_AT`). Avec un abonnement Claude, ça permet de ne pas consommer le quota pendant que tu l'utilises, et de répartir les recherches de plusieurs profils sur des fenêtres de 5 h différentes. Si la recherche de la nuit échoue, l'alerte arrive à l'heure du mail. Si elle n'a pas eu lieu (machine éteinte), le mail contient les offres notées les jours précédents et pas encore envoyées.
+
+**Mise à jour** : après un `git pull`, lance simplement `lancer` (ou `installer`). Si le code a changé, l'image Docker est reconstruite et les envois automatiques actifs sont relancés avec la nouvelle version.
 
 L'envoi automatique ne fonctionne que si la machine et Docker sont allumés à l'heure prévue. Sur un ordinateur personnel, lancer la recherche avec `lancer` quand tu le souhaites est souvent plus simple.
 
@@ -116,7 +120,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-Le conteneur reste actif et déclenche la recherche chaque jour à `RUN_AT` (21:00, heure de Paris par défaut). Si le VPS est éteint à l'heure prévue, la recherche du jour est sautée ; les offres seront rattrapées le lendemain grâce à la fenêtre `MAX_DAYS_OLD` de 2 jours.
+Le conteneur reste actif et déclenche la recherche chaque jour à `RUN_AT` (21:00, heure de Paris par défaut), ou à `SEARCH_AT` si la recherche doit avoir lieu plus tôt que le mail. Si le VPS est éteint à l'heure prévue, la recherche du jour est sautée ; les offres seront rattrapées le lendemain grâce à la fenêtre `MAX_DAYS_OLD` de 2 jours.
 
 Pour que tout redémarre avec le VPS, Docker doit être lancé au démarrage (`sudo systemctl enable docker`). Utilise ensuite toujours `docker compose up -d` : après un `docker compose stop` ou `down`, le conteneur ne repart pas tout seul.
 
@@ -170,6 +174,8 @@ Le quota gratuit de SerpApi (250 recherches par mois) est partagé entre tous le
 |---|---|
 | `python -m app schedule` | Mode par défaut du conteneur : tourne en continu, lance la recherche chaque jour |
 | `python -m app run` | Lance une recherche et envoie le mail immédiatement |
+| `python -m app search` | Lance une recherche sans envoyer de mail : les offres notées attendent le prochain envoi |
+| `python -m app send [--dry-run]` | Envoie les offres déjà notées et pas encore envoyées |
 | `python -m app run --dry-run` | Lance une recherche sans envoyer de mail : affiche le résultat et écrit `data/<profil>/last_email.html` |
 | `python -m app profile [--refresh]` | Affiche le profil, les requêtes et les mots-clés déduits du CV (`--refresh` force une nouvelle analyse) |
 | `python -m app test-mail` | Envoie un mail de test |
@@ -184,7 +190,7 @@ Les réglages sont dans `.env` (voir `.env.example`, chaque variable y est comme
 - **Entreprises qui t'intéressent particulièrement** : `TARGET_COMPANIES=L'Oréal,LVMH,Decathlon`. Claude va chercher chaque jour sur leur site carrière, et leurs offres venant de toutes les sources sont prioritaires et marquées d'une ⭐ dans le mail.
 - **Trop ou pas assez d'offres dans le mail** : `MIN_SCORE` et `MAX_RESULTS`.
 - **Mise à jour du CV** : remplace `data/<profil>/cv.pdf`. Il sera réanalysé automatiquement à la prochaine exécution.
-- **Changer l'heure** : `RUN_AT=08:30`, puis `docker compose up -d` pour appliquer.
+- **Changer l'heure** : `./lancer.sh <profil> heure 08:30`, ou `RUN_AT=08:30` (et `SEARCH_AT=03:00` pour une recherche plus tôt) dans le profil, puis `docker compose up -d <profil>` pour appliquer.
 - **Après une modification du `.env` ou d'un profil** : `docker compose up -d` (les conteneurs concernés sont recréés).
 
 ## Coût

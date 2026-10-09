@@ -9,3 +9,4 @@ docker-compose.override.yml
 docker-compose.override.yml.bak
 .env.bak
 .env.nouveau
+.image-construite
