@@ -6,69 +6,63 @@
 #   2. crée ses réglages dans profils/<nom>.env ;
 #   3. déclare son conteneur dans docker-compose.override.yml (fichier lu
 #      automatiquement par Docker Compose et ignoré par git : pas de conflit au git pull) ;
-#   4. propose un test sans envoi de mail, puis démarre son conteneur.
+#   4. propose une première recherche, puis l'envoi automatique quotidien.
 #
-# Usage : ./ajouter_cv.sh   (depuis le dossier du projet)
+# Usage : ./ajouter_cv.sh               (depuis le dossier du projet)
+#         ./ajouter_cv.sh --principal   premier profil, « principal », déjà déclaré dans
+#                                       docker-compose.yml (utilisé par installer.sh)
 
 set -euo pipefail
 cd "$(dirname "$0")"
+source scripts/commun.sh
 
 OVERRIDE=docker-compose.override.yml
-CONTAINER_UID=1000  # utilisateur du conteneur (voir Dockerfile)
-
-info()   { printf '\033[36m%s\033[0m\n' "$*"; }
-ok()     { printf '\033[32m✔ %s\033[0m\n' "$*"; }
-erreur() { printf '\033[31m✘ %s\033[0m\n' "$*" >&2; exit 1; }
-
-# demander "Question" [valeur par défaut] → réponse dans $REPONSE
-demander() {
-    local question=$1 defaut=${2:-}
-    if [[ -n $defaut ]]; then
-        read -r -p "$question [$defaut] : " REPONSE
-        REPONSE=${REPONSE:-$defaut}
-    else
-        read -r -p "$question : " REPONSE
-    fi
-}
-
-# confirmer "Question" o|n → code de retour 0 si oui
-confirmer() {
-    local question=$1 defaut=${2:-n} choix
-    if [[ $defaut == o ]]; then choix="O/n"; else choix="o/N"; fi
-    read -r -p "$question [$choix] : " REPONSE
-    REPONSE=${REPONSE:-$defaut}
-    [[ $REPONSE =~ ^[oOyY] ]]
-}
+principal=false
+[[ ${1:-} == --principal ]] && principal=true
 
 # ─── Vérifications préalables ──────────────────────────────────────────
-command -v docker >/dev/null || erreur "Docker n'est pas installé."
-[[ -f .env ]] || erreur "Fichier .env introuvable : crée-le d'abord (cp .env.example .env)."
+verifier_docker
+[[ -f .env ]] || erreur "Fichier .env introuvable : lance d'abord ./installer.sh."
 existants=$(docker compose config --services 2>/dev/null) || erreur "docker compose config a échoué : vérifie docker-compose.yml."
 
 echo
-info "═══ Ajout d'une nouvelle personne ═══"
-echo "Personnes déjà configurées : $(echo "$existants" | tr '\n' ' ')"
-echo
-
-# ─── 1. Nom ────────────────────────────────────────────────────────────
-while true; do
-    demander "Nom court de la personne (minuscules, chiffres, tirets ; ex. alice)"
-    nom=$REPONSE
-    if [[ ! $nom =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
-        echo "  → uniquement des minuscules sans accent, des chiffres et des tirets."
-    elif grep -qx "$nom" <<<"$existants"; then
-        echo "  → « $nom » existe déjà."
-    elif [[ -e profils/$nom.env || -e data/$nom ]]; then
-        echo "  → profils/$nom.env ou data/$nom/ existe déjà : choisis un autre nom ou supprime-les."
-    else
-        break
+if $principal; then
+    info "═══ Création du premier profil ═══"
+    nom=principal
+    if [[ -e data/$nom/cv.pdf ]]; then
+        erreur "Le profil « $nom » a déjà un CV. Pour le modifier : nano profils/$nom.env. Pour ajouter une personne : ./ajouter_cv.sh"
     fi
-done
+    if [[ -e profils/$nom.env ]]; then
+        confirmer "profils/$nom.env existe déjà. Le remplacer ?" n || { echo "Annulé, rien n'a été modifié."; exit 0; }
+    fi
+else
+    info "═══ Ajout d'une nouvelle personne ═══"
+    echo "Personnes déjà configurées : $(echo "$existants" | tr '\n' ' ')"
+    echo
+
+    # ─── 1. Nom ────────────────────────────────────────────────────────────
+    while true; do
+        demander "Nom court de la personne (minuscules, chiffres, tirets ; ex. alice)"
+        nom=$REPONSE
+        if [[ ! $nom =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo "  → uniquement des minuscules sans accent, des chiffres et des tirets."
+        elif grep -qx "$nom" <<<"$existants"; then
+            echo "  → « $nom » existe déjà."
+        elif [[ -e profils/$nom.env || -e data/$nom ]]; then
+            echo "  → profils/$nom.env ou data/$nom/ existe déjà : choisis un autre nom ou supprime-les."
+        else
+            break
+        fi
+    done
+fi
 
 # ─── 2. CV ─────────────────────────────────────────────────────────────
 while true; do
-    demander "Chemin du CV (PDF) sur cette machine"
-    cv=${REPONSE/#\~/$HOME}
+    demander "Chemin du CV (PDF) sur cette machine (tu peux glisser le fichier dans cette fenêtre)"
+    cv=$REPONSE
+    cv=${cv#[\'\"]}  # guillemets ajoutés quand on glisse un fichier dans le terminal
+    cv=${cv%[\'\"]}
+    cv=${cv/#\~/$HOME}
     if [[ ! -f $cv ]]; then
         echo "  → fichier introuvable : $cv"
     elif [[ $(head -c 4 "$cv") != "%PDF" ]]; then
@@ -129,7 +123,8 @@ while true; do
 done
 
 # Quota SerpApi gratuit (250 recherches/mois) partagé entre toutes les personnes
-nb_personnes=$(( $(echo "$existants" | grep -c .) + 1 ))
+nb_personnes=$(echo "$existants" | grep -c .)
+$principal || nb_personnes=$((nb_personnes + 1))
 recherches_google=$(( 250 / (31 * nb_personnes) ))
 (( recherches_google < 1 )) && recherches_google=1
 (( recherches_google > 6 )) && recherches_google=6
@@ -168,14 +163,11 @@ annuler() {
 }
 trap 'annuler "$LINENO" "$BASH_COMMAND"' ERR
 
-# 1. CV
+# 1. CV (data/principal peut déjà exister : installer.sh le crée pour le mail de test)
+if [[ -d data/$nom ]]; then crees+=("data/$nom/cv.pdf"); else crees+=("data/$nom"); fi
 mkdir -p "data/$nom"
-crees+=("data/$nom")
 cp "$cv" "data/$nom/cv.pdf"
-if [[ $(id -u) != "$CONTAINER_UID" ]]; then
-    echo "Attribution du dossier à l'utilisateur du conteneur (sudo peut demander ton mot de passe)…"
-    sudo chown -R "$CONTAINER_UID:$CONTAINER_UID" "data/$nom"
-fi
+donner_au_conteneur "data/$nom"
 ok "CV copié dans data/$nom/cv.pdf"
 
 # 2. Profil : toutes les valeurs personnelles sont écrites, même vides,
@@ -207,14 +199,15 @@ EOF
 chmod 600 "profils/$nom.env"
 ok "Réglages créés dans profils/$nom.env"
 
-# 3. Conteneur, dans docker-compose.override.yml
-if [[ -f $OVERRIDE ]]; then
-    cp "$OVERRIDE" "$OVERRIDE.bak"
-else
-    printf '# Personnes ajoutées avec ajouter_cv.sh. Fichier lu automatiquement par\n# Docker Compose en plus de docker-compose.yml, et ignoré par git.\n\nservices:\n' > "$OVERRIDE"
-    crees+=("$OVERRIDE")
-fi
-cat >> "$OVERRIDE" <<EOF
+# 3. Conteneur, dans docker-compose.override.yml (« principal » est déjà dans docker-compose.yml)
+if ! $principal; then
+    if [[ -f $OVERRIDE ]]; then
+        cp "$OVERRIDE" "$OVERRIDE.bak"
+    else
+        printf '# Personnes ajoutées avec ajouter_cv.sh. Fichier lu automatiquement par\n# Docker Compose en plus de docker-compose.yml, et ignoré par git.\n\nservices:\n' > "$OVERRIDE"
+        crees+=("$OVERRIDE")
+    fi
+    cat >> "$OVERRIDE" <<EOF
 
   $nom:
     image: job-alert
@@ -231,36 +224,41 @@ cat >> "$OVERRIDE" <<EOF
         max-size: "5m"
         max-file: "3"
 EOF
-# Vérifie que Docker Compose accepte la nouvelle configuration (affiche son erreur sinon)
-if ! services_apres=$(docker compose config --services 2>&1); then
-    printf '%s\n' "$services_apres" >&2
-    false
+    # Vérifie que Docker Compose accepte la nouvelle configuration (affiche son erreur sinon)
+    if ! services_apres=$(docker compose config --services 2>&1); then
+        printf '%s\n' "$services_apres" >&2
+        false
+    fi
+    if ! grep -qx "$nom" <<<"$services_apres"; then
+        printf 'Docker Compose ne voit pas le service « %s ». Services vus :\n%s\n' "$nom" "$services_apres" >&2
+        false
+    fi
+    rm -f "$OVERRIDE.bak"
+    ok "Conteneur « job-alert-$nom » déclaré dans $OVERRIDE"
 fi
-if ! grep -qx "$nom" <<<"$services_apres"; then
-    printf 'Docker Compose ne voit pas le service « %s ». Services vus :\n%s\n' "$nom" "$services_apres" >&2
-    false
-fi
-rm -f "$OVERRIDE.bak"
 trap - ERR
-ok "Conteneur « job-alert-$nom » déclaré dans $OVERRIDE"
 
-# ─── Test et démarrage ─────────────────────────────────────────────────
+# ─── Première recherche et envoi automatique ───────────────────────────
 echo
-if ! docker image inspect job-alert >/dev/null 2>&1; then
-    info "Construction de l'image Docker…"
-    docker compose build
-fi
+construire_image
+echo
+choisir "Lancer une première recherche maintenant (2 à 5 minutes) ?" \
+    "Oui, sans envoyer de mail : juste pour vérifier (aperçu)" \
+    "Oui, et envoyer le mail à $mail_to" \
+    "Non, plus tard"
+case $REPONSE in
+    1) lancer_recherche "$nom" --dry-run || true ;;
+    2) lancer_recherche "$nom" || true ;;
+esac
 
-if confirmer "Lancer un test maintenant (recherche complète, sans envoi de mail, ~2 à 5 min) ?" n; then
-    docker compose run --rm "$nom" python -m app run --dry-run || \
-        echo "Le test a échoué : corrige profils/$nom.env ou le .env, puis relance : docker compose run --rm $nom python -m app run --dry-run"
-fi
-
-if confirmer "Démarrer l'envoi quotidien pour $nom maintenant ?" o; then
+echo
+echo "Envoi automatique : la recherche peut tourner toute seule tous les jours à $heure,"
+echo "tant que cette machine et Docker restent allumés. Sinon, lance-la quand tu veux avec ./lancer.sh"
+if confirmer "Activer l'envoi automatique quotidien pour $nom ?" o; then
     docker compose up -d "$nom"
     ok "« $nom » recevra ses offres tous les jours à $heure."
 else
-    echo "Pour démarrer plus tard : docker compose up -d $nom"
+    echo "Pour l'activer plus tard : ./lancer.sh $nom"
 fi
 
 if (( nb_personnes > 1 )); then
@@ -270,6 +268,6 @@ if (( nb_personnes > 1 )); then
 fi
 echo
 echo "Commandes utiles pour $nom :"
-echo "  docker compose logs -f $nom                              # suivre les logs"
-echo "  docker compose run --rm $nom python -m app run --dry-run  # test sans envoi"
-echo "  nano profils/$nom.env && docker compose up -d $nom        # modifier ses réglages"
+echo "  ./lancer.sh $nom                                    # lancer une recherche, activer ou arrêter l'envoi automatique"
+echo "  docker compose logs -f $nom                         # suivre les logs de l'envoi automatique"
+echo "  nano profils/$nom.env && docker compose up -d $nom   # modifier ses réglages"

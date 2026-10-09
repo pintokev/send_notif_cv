@@ -62,7 +62,32 @@ Ce jeton donne accès à ton abonnement : garde-le secret, comme une clé API. I
 - **Recherche sur les sites carrière** : en mode abonnement, Claude Code n'a pas de plafond strict par appel. La limite `CAREER_SEARCHES_PER_COMPANY` lui est donnée comme consigne, et il la respecte en général.
 - **Image Docker** : Claude Code est installé dans l'image (environ 420 Mo au total), même si tu utilises une clé API.
 
-## Installation sur le VPS
+## Installation simple (recommandé)
+
+Il faut seulement [Docker](https://docs.docker.com/engine/install/) sur un serveur Linux, ou [Docker Desktop](https://www.docker.com/products/docker-desktop/) sur un ordinateur Windows ou Mac, démarré. Récupère le projet (`git clone`, ou bouton « Code → Download ZIP » sur GitHub), puis :
+
+| | Linux, macOS | Windows |
+|---|---|---|
+| Installer | `./installer.sh` | double-clic sur `installer.bat` |
+| Lancer une recherche | `./lancer.sh` | double-clic sur `lancer.bat` |
+| Ajouter une personne | `./ajouter_cv.sh` | double-clic sur `ajouter_cv.bat` |
+
+**L'installeur** pose les questions une par une, avec les liens utiles :
+
+1. connexion à Claude (abonnement ou clé API), envoi des mails (Gmail, OVH ou autre), sources d'offres facultatives. Il crée le `.env` ;
+2. construit l'image Docker et envoie un mail de test. En cas d'échec, il propose de ressaisir les paramètres ;
+3. crée le premier profil (« principal ») : CV, adresse qui reçoit les offres, ville, critères…
+4. propose une première recherche, puis l'envoi automatique quotidien. Celui-ci est facultatif.
+
+Relancé plus tard, il permet de modifier une partie du `.env` (l'ancienne version est gardée dans `.env.bak`) ou d'ajouter une personne.
+
+**`lancer`** déclenche une recherche à la demande, sans attendre l'heure prévue : avec envoi du mail, ou en aperçu, sans envoi (le mail est alors enregistré dans `data/<profil>/last_email.html`, et ouvert dans le navigateur sous Windows et macOS). Il permet aussi d'envoyer un mail de test, de voir le profil déduit du CV, et d'activer ou d'arrêter l'envoi automatique quotidien. Sans question : `./lancer.sh <profil> <action>`, avec l'action `envoi`, `apercu`, `test-mail`, `profil`, `activer` ou `arreter`.
+
+L'envoi automatique ne fonctionne que si la machine et Docker sont allumés à l'heure prévue. Sur un ordinateur personnel, lancer la recherche avec `lancer` quand tu le souhaites est souvent plus simple.
+
+Sous Windows, les fichiers `.bat` exécutent `scripts/windows.ps1` (PowerShell, inclus dans Windows).
+
+## Installation manuelle sur le VPS
 
 ```bash
 # 1. Récupérer le projet
@@ -116,7 +141,7 @@ Le script pose les questions une par une : nom, chemin du CV (PDF), adresse mail
 1. copie le CV dans `data/<nom>/cv.pdf` et donne les droits au conteneur ;
 2. crée `profils/<nom>.env`. Tous les réglages personnels y sont écrits, même vides, pour que la personne n'hérite jamais des critères d'une autre via le `.env` commun ;
 3. déclare son conteneur `job-alert-<nom>` dans `docker-compose.override.yml`. Docker Compose lit ce fichier automatiquement en plus de `docker-compose.yml`, et il est ignoré par git : pas de conflit au `git pull`, et la liste des personnes reste privée ;
-4. propose un test sans envoi de mail, puis démarre l'envoi quotidien.
+4. propose une première recherche (avec ou sans envoi du mail), puis l'envoi automatique quotidien, qui reste facultatif.
 
 Il calcule aussi le nombre de recherches Google Jobs par jour pour rester dans le quota gratuit de SerpApi, partagé entre toutes les personnes. Pense à reporter cette valeur dans les profils existants, comme il te l'indique à la fin.
 
@@ -195,7 +220,11 @@ app/
   storage.py       historique SQLite (data/<profil>/jobs.sqlite3)
   mailer.py        composition et envoi du mail
   templates/       modèle HTML du mail
+installer.sh       installation guidée : .env, mail de test, premier profil
+lancer.sh          recherche à la demande, activation de l'envoi automatique
 ajouter_cv.sh      ajout interactif d'une personne (CV + mail)
+*.bat              mêmes scripts pour Windows (double-clic), via scripts/windows.ps1
+scripts/           fonctions communes aux scripts .sh, version Windows
 profils/           réglages propres à chaque CV (exemple.env fourni)
 data/<profil>/     CV, cache du profil, base SQLite (volume Docker)
 ```
