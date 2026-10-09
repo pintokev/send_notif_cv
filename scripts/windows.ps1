@@ -2,7 +2,8 @@
 # ajouter_cv.bat et lancer.bat :
 #   installer  crée le .env, envoie un mail de test et crée le premier profil ;
 #   ajouter    ajoute une personne (CV + adresse mail) ;
-#   lancer     lance une recherche à la demande, active ou arrête l'envoi automatique.
+#   lancer     lance une recherche à la demande, active ou arrête l'envoi automatique,
+#              modifie ou supprime un profil.
 # Fichier enregistré en UTF-8 avec BOM : sans BOM, Windows PowerShell 5.1 lit mal les accents.
 
 param(
@@ -367,25 +368,36 @@ function Installer {
 
 # ─── ajouter : nouvelle personne ───────────────────────────────────────
 
+# Valeur-Google nom → recherches Google Jobs par jour de cette personne (6 par défaut)
+function Valeur-Google([string]$Nom) {
+    $valeur = Reglage-De $Nom GOOGLEJOBS_SEARCHES_PER_RUN
+    if ($valeur -match '^[0-9]+$') { return [int]$valeur }
+    return 6
+}
+
 # Utilise-Google nom → $true si cette personne interroge Google Jobs
 # (SOURCES de son profil, sinon celui du .env ; vide = toutes les sources)
 function Utilise-Google([string]$Nom) {
-    $fichier = "profils\$Nom.env"
-    if (-not ((Test-Path -LiteralPath $fichier) -and (Select-String -LiteralPath $fichier -Pattern '^SOURCES=' -Quiet))) { $fichier = '.env' }
-    $valeur = (Lire-Reglage $fichier SOURCES) -replace '\s', ''
+    $valeur = (Reglage-De $Nom SOURCES) -replace '\s', ''
     return (-not $valeur -or ",$valeur," -like '*,googlejobs,*')
 }
 
-function Ajouter-Personne([switch]$Principal) {
+function Ajouter-Personne([switch]$Principal, [string]$Modifier = '') {
     if (-not (Test-Path -LiteralPath '.env')) { Erreur "Fichier .env introuvable : lance d'abord installer.bat." }
     $existants = @(Services-Compose)
 
     Write-Host ''
-    if ($Principal) {
+    if ($Modifier) {
+        $nom = $Modifier
+        if ($existants -notcontains $nom) { Erreur "Profil « $nom » inconnu. Profils existants : $($existants -join ' ')" }
+        if (-not (Test-Path -LiteralPath "data\$nom\cv.pdf")) { Erreur "Pas de CV pour « $nom » : dépose-le dans data\$nom\cv.pdf." }
+        Info "═══ Modification du profil « $nom » ═══"
+        Write-Host 'Entrée garde la valeur actuelle (entre crochets), « - » la vide.'
+    } elseif ($Principal) {
         Info '═══ Création du premier profil ═══'
         $nom = 'principal'
         if (Test-Path -LiteralPath "data\$nom\cv.pdf") {
-            Erreur "Le profil « $nom » a déjà un CV. Pour le modifier : profils\$nom.env. Pour ajouter une personne : ajouter_cv.bat"
+            Erreur "Le profil « $nom » a déjà un CV. Pour le modifier : lancer.bat $nom. Pour ajouter une personne : ajouter_cv.bat"
         }
         if ((Test-Path -LiteralPath "profils\$nom.env") -and -not (Confirmer "profils\$nom.env existe déjà. Le remplacer ?")) {
             Write-Host "Annulé, rien n'a été modifié."
@@ -409,9 +421,45 @@ function Ajouter-Personne([switch]$Principal) {
         }
     }
 
+    # Valeurs proposées : celles du profil pour une modification, sinon les valeurs par défaut
+    $d = @{ mail = ''; ville = ''; rayon = ''; teletravail = 'o'; preferences = ''; exclusions = 'stage,alternance'
+            entreprises = ''; sources = ''; heure = ''; recherche = ''; score = ''; max = '' }
+    if ($Modifier) {
+        $d.mail = Reglage-De $nom MAIL_TO
+        $d.ville = Reglage-De $nom LOCATION_CITY
+        $d.rayon = Reglage-De $nom LOCATION_RADIUS_KM
+        # Même lecture que l'appli (app/config.py) : vide = oui, sinon oui seulement pour 1/true/yes/oui/on
+        $distance = Reglage-De $nom INCLUDE_REMOTE
+        if ($distance -and $distance -notmatch '^(1|true|yes|oui|on)$') { $d.teletravail = 'n' }
+        $d.preferences = Reglage-De $nom CANDIDATE_PREFERENCES
+        $d.exclusions = Reglage-De $nom EXCLUDE_KEYWORDS
+        $d.entreprises = Reglage-De $nom TARGET_COMPANIES
+        $d.sources = (Reglage-De $nom SOURCES) -replace '\s', ''
+        $d.heure = Reglage-De $nom RUN_AT
+        if (-not $d.heure) { $d.heure = '21:00' }  # RUN_AT vide : l'appli envoie à 21:00
+        $d.recherche = Reglage-De $nom SEARCH_AT
+        $d.score = Reglage-De $nom MIN_SCORE
+        $d.max = Reglage-De $nom MAX_RESULTS
+    }
+    if (-not $d.rayon) { $d.rayon = '30' }
+    if (-not $d.heure) { $d.heure = '21:15' }
+    if (-not $d.score) { $d.score = '60' }
+    if (-not $d.max) { $d.max = '15' }
+    # Demander-Texte "Question" [valeur proposée] → réponse ; « - » vide la valeur
+    function Demander-Texte([string]$Question, [string]$Defaut = '') {
+        $r = Demander $Question $Defaut
+        if ($r -eq '-') { return '' }
+        return $r
+    }
+
     # CV
     while ($true) {
-        $cv = (Demander 'Chemin du CV (PDF) : glisse le fichier dans cette fenêtre puis appuie sur Entrée').Trim('"', "'")
+        if ($Modifier) {
+            $cv = (Demander "Nouveau CV (PDF) : glisse le fichier dans cette fenêtre (Entrée = garder l'actuel)").Trim('"', "'")
+            if (-not $cv) { break }
+        } else {
+            $cv = (Demander 'Chemin du CV (PDF) : glisse le fichier dans cette fenêtre puis appuie sur Entrée').Trim('"', "'")
+        }
         if (-not $cv -or -not (Test-Path -LiteralPath $cv -PathType Leaf)) { Write-Host "  → fichier introuvable : $cv"; continue }
         $cv = (Resolve-Path -LiteralPath $cv).Path
         $flux = [IO.File]::OpenRead($cv)
@@ -422,62 +470,108 @@ function Ajouter-Personne([switch]$Principal) {
 
     # Mail
     do {
-        $mailTo = Demander 'Adresse mail qui recevra les offres (plusieurs : séparées par des virgules)'
+        $mailTo = Demander 'Adresse mail qui recevra les offres (plusieurs : séparées par des virgules)' $d.mail
         if ($mailTo -notmatch $MailsRegex) { Write-Host '  → adresse invalide.' }
     } until ($mailTo -match $MailsRegex)
 
     # Recherche
     Write-Host ''
-    Info 'Recherche (Entrée pour accepter la valeur proposée)'
-    $ville = Demander 'Ville autour de laquelle chercher (vide = toute la France)'
-    $rayon = '30'
-    if ($ville) { do { $rayon = Demander 'Rayon de recherche en km' '30' } until ($rayon -match '^[0-9]+$') }
-    $teletravail = if (Confirmer 'Inclure les offres 100 % télétravail ?' 'o') { 'true' } else { 'false' }
-    $preferences = Demander 'Critères en langage naturel (ex. CDI uniquement, pas de management ; vide = aucun)'
-    $exclusions = Demander 'Mots à exclure des intitulés, séparés par des virgules' 'stage,alternance'
-    $entreprises = Demander 'Entreprises cibles, séparées par des virgules (vide = aucune)'
+    Info 'Recherche (Entrée = valeur proposée, « - » = vide)'
+    $ville = Demander-Texte 'Ville autour de laquelle chercher (vide = toute la France)' $d.ville
+    $rayon = $d.rayon
+    if ($ville) { do { $rayon = Demander 'Rayon de recherche en km' $d.rayon } until ($rayon -match '^[0-9]+$') }
+    $teletravail = if (Confirmer 'Inclure les offres 100 % télétravail ?' $d.teletravail) { 'true' } else { 'false' }
+    $preferences = Demander-Texte 'Critères en langage naturel (ex. CDI uniquement, pas de management ; vide = aucun)' $d.preferences
+    $exclusions = Demander-Texte 'Mots à exclure des intitulés, séparés par des virgules' $d.exclusions
+    $entreprises = Demander-Texte 'Entreprises cibles, séparées par des virgules (vide = aucune)' $d.entreprises
 
-    # Sources à clé : proposées seulement si leur clé est dans le .env. Une source sans clé reste
-    # dans la liste (elle est ignorée tant que la clé manque), pour s'activer dès qu'on l'ajoute.
-    # WTTJ et les sites télétravail sont gratuits et toujours interrogés ; les sites carrière
-    # le sont dès que la personne a des entreprises cibles.
-    $exclues = @()
-    $aCle = @{
-        francetravail = [bool](Lire-Reglage '.env' FRANCETRAVAIL_CLIENT_ID)
-        adzuna        = [bool](Lire-Reglage '.env' ADZUNA_APP_ID)
-        googlejobs    = [bool](Lire-Reglage '.env' SERPAPI_API_KEY)
+    # Sources à clé : proposées seulement si leur clé est dans le .env. Les autres sources gardent
+    # leur état actuel (toutes pour un nouveau profil) : une source sans clé reste dans la liste,
+    # ignorée tant que la clé manque, pour s'activer dès qu'on l'ajoute. WTTJ et les sites
+    # télétravail sont gratuits ; les sites carrière ne servent que s'il y a des entreprises cibles.
+    $questions = @{
+        francetravail = @('FRANCETRAVAIL_CLIENT_ID', 'Chercher sur France Travail ?')
+        adzuna        = @('ADZUNA_APP_ID', 'Chercher sur Adzuna ?')
+        googlejobs    = @('SERPAPI_API_KEY', 'Chercher sur Google Jobs (LinkedIn, Indeed, APEC… ; quota SerpApi partagé entre les personnes) ?')
     }
-    if ($aCle.Values -contains $true) { Write-Host ''; Info "Sources d'offres utilisant tes clés API" }
-    if ($aCle.francetravail -and -not (Confirmer 'Chercher sur France Travail ?' 'o')) { $exclues += 'francetravail' }
-    if ($aCle.adzuna -and -not (Confirmer 'Chercher sur Adzuna ?' 'o')) { $exclues += 'adzuna' }
-    if ($aCle.googlejobs -and -not (Confirmer 'Chercher sur Google Jobs (LinkedIn, Indeed, APEC… ; quota SerpApi partagé entre les personnes) ?' 'o')) { $exclues += 'googlejobs' }
-    $sources = (@('francetravail', 'adzuna', 'wttj', 'googlejobs', 'careersites', 'remotive', 'remoteok', 'jobicy') |
-        Where-Object { $exclues -notcontains $_ }) -join ','
+    $aCle = @($questions.Keys | Where-Object { Lire-Reglage '.env' $questions[$_][0] })
+    if ($aCle.Count -gt 0) { Write-Host ''; Info "Sources d'offres utilisant tes clés API" }
+    $choisies = @()
+    foreach ($source in @('francetravail', 'adzuna', 'wttj', 'googlejobs', 'careersites', 'remotive', 'remoteok', 'jobicy')) {
+        $utilisee = (-not $d.sources) -or (",$($d.sources)," -like "*,$source,*")
+        if ($aCle -contains $source) {
+            if (Confirmer $questions[$source][1] $(if ($utilisee) { 'o' } else { 'n' })) { $choisies += $source }
+        } elseif ($utilisee) {
+            $choisies += $source
+        }
+    }
+    $sources = $choisies -join ','
 
     # Envoi
     Write-Host ''
     Info 'Envoi du mail'
-    do { $heure = Demander "Heure d'envoi quotidienne (HH:MM, heure de Paris)" '21:15' } until ($heure -match $HeureRegex)
+    do { $heure = Demander "Heure d'envoi quotidienne (HH:MM, heure de Paris)" $d.heure } until ($heure -match $HeureRegex)
     Write-Host "La recherche peut avoir lieu plus tôt que le mail, par exemple la nuit : les offres notées attendent l'heure du mail."
     while ($true) {
-        $heureRecherche = Demander 'Heure de la recherche (HH:MM, ex. 03:00 ; vide = au moment du mail)'
-        if (-not $heureRecherche -or $heureRecherche -match $HeureRegex) { break }
-        Write-Host '  → format attendu : HH:MM (ex. 03:00), ou vide.'
+        $heureRecherche = Demander 'Heure de la recherche (HH:MM, ex. 03:00 ; « non » = au moment du mail)' $(if ($d.recherche) { $d.recherche } else { 'non' })
+        if ($heureRecherche -eq 'non' -or $heureRecherche -eq '-' -or $heureRecherche -match $HeureRegex) { break }
+        Write-Host '  → format attendu : HH:MM (ex. 03:00), ou « non ».'
     }
-    if ($heureRecherche -eq $heure) { $heureRecherche = '' }
+    if ($heureRecherche -eq 'non' -or $heureRecherche -eq '-' -or $heureRecherche -eq $heure) { $heureRecherche = '' }
     $horaire = if ($heureRecherche) { "recherche à $heureRecherche, mail à $heure" } else { "à $heure" }
-    do { $score = Demander "Score minimum (0-100) pour qu'une offre figure dans le mail" '60' } until ($score -match '^[0-9]+$' -and [int]$score -le 100)
-    do { $maxOffres = Demander "Nombre maximum d'offres par mail" '15' } until ($maxOffres -match '^[1-9][0-9]*$')
+    do { $score = Demander "Score minimum (0-100) pour qu'une offre figure dans le mail" $d.score } until ($score -match '^[0-9]+$' -and [int]$score -le 100)
+    do { $maxOffres = Demander "Nombre maximum d'offres par mail" $d.max } until ($maxOffres -match '^[1-9][0-9]*$')
 
-    # Quota SerpApi gratuit (250 recherches/mois) partagé entre les personnes qui utilisent Google Jobs
-    $google = $exclues -notcontains 'googlejobs'
-    $nbGoogle = @($existants | Where-Object { $_ -ne $nom -and (Utilise-Google $_) }).Count + $(if ($google) { 1 } else { 0 })
-    $recherchesGoogle = [Math]::Max(1, [Math]::Min(6, [Math]::Floor(250 / (31 * [Math]::Max(1, $nbGoogle)))))
+    # Quota SerpApi gratuit (250 recherches/mois) partagé entre les personnes qui utilisent Google Jobs.
+    # Seuls les profils avec un CV comptent (« principal » peut exister sans être utilisé).
+    $quota = 250
+    $google = $choisies -contains 'googlejobs'
+    $autresGoogle = @($existants | Where-Object { $_ -ne $nom -and (Test-Path -LiteralPath "data\$_\cv.pdf") -and (Utilise-Google $_) })
+    $sommeAutres = 0
+    foreach ($autre in $autresGoogle) { $sommeAutres += Valeur-Google $autre }
+    $nbGoogle = $autresGoogle.Count + 1
+    $conseil = [int][Math]::Max(1, [Math]::Min(6, [Math]::Floor($quota / (31 * $nbGoogle))))
+    $recherchesGoogle = $conseil
+    $reequilibrage = 0   # nouvelle valeur pour les autres personnes, si elles doivent être réduites
+    $totalGoogle = 0
+    if ($google) {
+        Write-Host ''
+        Write-Host "Google Jobs : $quota recherches gratuites par mois, partagées entre les $nbGoogle personnes qui l'utilisent."
+        Write-Host "Conseillé : $conseil recherches par jour chacune (plus de recherches = plus d'offres)."
+        $defaut = if ($Modifier) { Valeur-Google $nom } else { $conseil }
+        do { $r = Demander "Recherches Google Jobs par jour pour $nom" "$defaut" } until ($r -match '^[1-9][0-9]*$')
+        $recherchesGoogle = [int]$r
+        $totalGoogle = ($sommeAutres + $recherchesGoogle) * 31
+        if ($totalGoogle -gt $quota -and $autresGoogle.Count -gt 0) {
+            $reduit = [int][Math]::Max(1, [Math]::Floor(($quota - $recherchesGoogle * 31) / (31 * $autresGoogle.Count)))
+            # Seules les personnes au-dessus de cette valeur sont réduites (jamais augmentées)
+            $aReduire = @($autresGoogle | Where-Object { (Valeur-Google $_) -gt $reduit })
+            $sommeReduite = 0
+            foreach ($autre in $autresGoogle) { $sommeReduite += [Math]::Min($reduit, (Valeur-Google $autre)) }
+            Attention "Au total : $totalGoogle recherches par mois pour toutes les personnes, au-delà des $quota gratuites."
+            if ($aReduire.Count -gt 0 -and (Confirmer "Ramener $($aReduire -join ' ') à $reduit recherches par jour ?" 'o')) {
+                $reequilibrage = $reduit
+                $autresGoogle = $aReduire
+                $totalGoogle = ($sommeReduite + $recherchesGoogle) * 31
+            }
+        }
+        if ($totalGoogle -gt $quota) { Attention "Le quota sera dépassé : Google Jobs s'arrêtera avant la fin du mois, quand il sera épuisé." }
+    }
+
+    # Applique la réduction acceptée aux autres personnes, et relance leur envoi automatique s'il est actif
+    function Appliquer-Reequilibrage {
+        if ($reequilibrage -eq 0) { return }
+        $actifs = @((Capturer-Docker compose ps --status running --services).Lignes)
+        foreach ($autre in $autresGoogle) { Ecrire-Reglage "profils\$autre.env" GOOGLEJOBS_SEARCHES_PER_RUN "$reequilibrage" }
+        Ok "Google Jobs : $reequilibrage recherches par jour pour $($autresGoogle -join ' ')"
+        $relancer = @($autresGoogle | Where-Object { $actifs -contains $_ })
+        if ($relancer.Count -gt 0) { Lancer-Docker compose up -d @relancer | Out-Null }
+    }
 
     Write-Host ''
     Info '═══ Récapitulatif ═══'
     Write-Host "  Nom                : $nom"
-    Write-Host "  CV                 : $cv → data\$nom\cv.pdf"
+    Write-Host "  CV                 : $(if ($cv) { "$cv → data\$nom\cv.pdf" } else { 'inchangé' })"
     Write-Host "  Mail               : $mailTo"
     Write-Host "  Ville / rayon      : $(if ($ville) { "$ville / $rayon km" } else { 'toute la France' })"
     Write-Host "  Télétravail        : $teletravail"
@@ -486,8 +580,38 @@ function Ajouter-Personne([switch]$Principal) {
     Write-Host "  Entreprises cibles : $(if ($entreprises) { $entreprises } else { 'aucune' })"
     Write-Host "  Envoi              : tous les jours $horaire, score ≥ $score, $maxOffres offres max"
     Write-Host "  Sources            : $sources"
-    if ($google) { Write-Host "  Google Jobs        : $recherchesGoogle recherches par jour (quota SerpApi partagé entre $nbGoogle personnes)" }
+    if ($google) {
+        Write-Host "  Google Jobs        : $recherchesGoogle recherches par jour"
+        if ($reequilibrage) { Write-Host "                       (et $reequilibrage pour $($autresGoogle -join ' ')) : $totalGoogle recherches par mois sur $quota" }
+        else { Write-Host "                       (toutes personnes : $totalGoogle recherches par mois sur $quota)" }
+    }
     Write-Host ''
+
+    # Modification : mise à jour du profil existant
+    if ($Modifier) {
+        if (-not (Confirmer 'Enregistrer ces modifications ?' 'o')) { Write-Host "Annulé, rien n'a été modifié."; return }
+        if ($cv) {
+            Copy-Item -LiteralPath $cv -Destination "data\$nom\cv.pdf" -Force
+            Ok 'Nouveau CV copié : il sera analysé à la prochaine recherche.'
+        }
+        $profil = "profils\$nom.env"
+        $valeurs = [ordered]@{
+            MAIL_TO = $mailTo; LOCATION_CITY = $ville; LOCATION_RADIUS_KM = $rayon; INCLUDE_REMOTE = $teletravail
+            CANDIDATE_PREFERENCES = $preferences; EXCLUDE_KEYWORDS = $exclusions; TARGET_COMPANIES = $entreprises
+            RUN_AT = $heure; SEARCH_AT = $heureRecherche; MIN_SCORE = $score; MAX_RESULTS = $maxOffres
+            SOURCES = $sources
+        }
+        if ($google) { $valeurs.GOOGLEJOBS_SEARCHES_PER_RUN = "$recherchesGoogle" }
+        foreach ($cle in $valeurs.Keys) { Ecrire-Reglage $profil $cle $valeurs[$cle] }
+        Ok "Réglages enregistrés dans $profil"
+        if (@((Capturer-Docker compose ps --status running --services).Lignes) -contains $nom) {
+            # Recrée le conteneur avec les nouveaux réglages
+            if (Lancer-Docker compose up -d $nom) { Ok "Envoi automatique relancé avec les nouveaux réglages (tous les jours, $horaire)." }
+        }
+        Appliquer-Reequilibrage
+        return
+    }
+
     if (-not (Confirmer 'Créer cette personne ?' 'o')) { Write-Host "Annulé, rien n'a été modifié."; return }
 
     # Création, annulée en cas d'erreur
@@ -527,7 +651,7 @@ MAX_RESULTS=$maxOffres
 
 # Sources interrogées (retirer un nom pour ne plus l'utiliser)
 SOURCES=$sources
-# Quota SerpApi gratuit (250 recherches/mois) partagé entre les personnes qui utilisent Google Jobs
+# Recherches Google Jobs par jour (quota SerpApi gratuit de 250 par mois, partagé entre les personnes)
 GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
 
 "@
@@ -576,6 +700,7 @@ GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
         if ($null -ne $sauvegardeOverride) { Ecrire-Texte $Override $sauvegardeOverride }
         exit 1
     }
+    Appliquer-Reequilibrage
 
     # Première recherche et envoi automatique
     Write-Host ''
@@ -596,12 +721,6 @@ GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
     } else {
         Write-Host "Pour l'activer plus tard : lancer.bat"
     }
-
-    if ($google -and $nbGoogle -gt 1) {
-        Write-Host ''
-        Info "Pense au quota Google Jobs : mets GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle dans le profil de chaque personne qui l'utilise"
-        Info "(et dans le .env pour « principal » s'il n'a pas de profils\principal.env), puis : docker compose up -d"
-    }
 }
 
 # ─── lancer : recherche à la demande ───────────────────────────────────
@@ -613,6 +732,45 @@ function Reglage-De([string]$Nom, [string]$Cle) {
         return (Lire-Reglage $profil $Cle)
     }
     return (Lire-Reglage '.env' $Cle)
+}
+
+# Supprimer-Profil nom : retire son conteneur, son bloc dans docker-compose.override.yml,
+# ses réglages, son CV et l'historique de ses offres
+function Supprimer-Profil([string]$Nom) {
+    Write-Host ''
+    Attention "Suppression de « $Nom » : ses réglages, son CV et l'historique de ses offres seront effacés."
+    if (-not (Confirmer "Supprimer définitivement « $Nom » ?")) { Write-Host "Annulé, rien n'a été supprimé."; return }
+    Capturer-Docker compose rm -sf $Nom | Out-Null  # arrête et retire son conteneur
+    if (Test-Path -LiteralPath $Override) {
+        $avant = [IO.File]::ReadAllText($Override, $Utf8)
+        $lignes = $avant -split "\r?\n"
+        if ($lignes -contains "  ${Nom}:") {
+            # Retire son bloc, de la ligne « <nom>: » jusqu'au service suivant
+            $service = '^  [^ #][^:]*:\s*$'
+            $saute = $false
+            $gardees = foreach ($ligne in $lignes) {
+                if ($ligne -eq "  ${Nom}:") { $saute = $true; continue }
+                if ($saute -and $ligne -match $service) { $saute = $false }
+                if (-not $saute) { $ligne }
+            }
+            if (@($gardees | Where-Object { $_ -match $service }).Count -eq 0) {
+                Remove-Item -LiteralPath $Override  # plus aucune personne ajoutée
+            } else {
+                Ecrire-Texte $Override ($gardees -join "`n")
+            }
+            if ((Capturer-Docker compose config --services).Code -ne 0) {
+                Ecrire-Texte $Override $avant
+                Erreur "Docker Compose refuse la configuration sans « $Nom » : $Override restauré, rien d'autre n'a été supprimé."
+            }
+        }
+    }
+    Remove-Item -LiteralPath "profils\$Nom.env" -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath "data\$Nom" -Recurse -Force -ErrorAction SilentlyContinue
+    if ($Nom -eq 'principal') {
+        Ok "Profil « principal » vidé. Il reste déclaré dans docker-compose.yml, mais sans CV il est ignoré : installer.bat pour le recréer."
+    } else {
+        Ok "« $Nom » a été supprimé."
+    }
 }
 
 # Heure-De nom → heure du mail (21:00 par défaut)
@@ -725,11 +883,13 @@ function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure, [string]$
                 $options += "Activer l'envoi automatique quotidien, aux heures de ton choix"
                 $actions += 'activer'
             }
+            $options += 'Modifier le profil (CV, mail, ville, critères, sources…)', 'Supprimer ce profil'
+            $actions += 'modifier', 'supprimer'
             Write-Host ''
             $Action = $actions[(Choisir "Que veux-tu faire pour « $Nom » ?" $options) - 1]
         }
-        if (@('envoi', 'apercu', 'test-mail', 'profil', 'activer', 'heure', 'arreter') -notcontains $Action) {
-            Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer, heure ou arreter)"
+        if (@('envoi', 'apercu', 'test-mail', 'profil', 'activer', 'heure', 'arreter', 'modifier', 'supprimer') -notcontains $Action) {
+            Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer, heure, arreter, modifier ou supprimer)"
         }
 
         # Heures de l'envoi automatique : en arguments, sinon demandées (Entrée = heure actuelle).
@@ -759,6 +919,10 @@ function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure, [string]$
             if ($NouvelleRecherche -ne $recherche) { Ecrire-Reglage "profils\$Nom.env" SEARCH_AT $NouvelleRecherche }
         }
     }
+
+    # Modification et suppression d'un profil
+    if ($Action -eq 'modifier') { Ajouter-Personne -Modifier $Nom; return }
+    if ($Action -eq 'supprimer') { Supprimer-Profil $Nom; return }
 
     # Exécution
     Write-Host ''

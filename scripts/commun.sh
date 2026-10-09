@@ -1,6 +1,7 @@
 # Fonctions communes à installer.sh, ajouter_cv.sh et lancer.sh (chargées avec « source »).
 
 CONTAINER_UID=1000  # utilisateur du conteneur (voir Dockerfile)
+HEURE_REGEX='^([01][0-9]|2[0-3]):[0-5][0-9]$'  # HH:MM
 
 info()      { printf '\033[36m%s\033[0m\n' "$*"; }
 ok()        { printf '\033[32m✔ %s\033[0m\n' "$*"; }
@@ -55,6 +56,15 @@ lire_reglage() {
         valeur=${BASH_REMATCH[1]}
     fi
     printf '%s' "$valeur"
+}
+
+# reglage_de <nom> CLE → valeur dans le profil de cette personne, sinon dans le .env (comme Docker Compose)
+reglage_de() {
+    if grep -q "^$2=" "profils/$1.env" 2>/dev/null; then
+        lire_reglage "profils/$1.env" "$2"
+    else
+        lire_reglage .env "$2"
+    fi
 }
 
 # ecrire_reglage fichier CLE valeur : remplace la ligne CLE= du fichier (ou l'ajoute ; crée le fichier).

@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
-# Lance une recherche à la demande, sans attendre l'heure prévue,
-# et active ou arrête l'envoi automatique quotidien.
+# Lance une recherche à la demande, sans attendre l'heure prévue, active ou arrête l'envoi
+# automatique quotidien, et modifie ou supprime un profil.
 #
 # Usage : ./lancer.sh                 avec des menus
 #         ./lancer.sh <nom>           avec des menus, pour cette personne (« tous » : tous les profils)
 #         ./lancer.sh <nom> <action>  sans question. Actions : envoi, apercu, test-mail, profil,
-#                                     activer [mail [recherche]], heure mail [recherche], arreter
+#                                     activer [mail [recherche]], heure mail [recherche], arreter,
+#                                     modifier, supprimer
 #                                     (heures en HH:MM ; recherche « non » = au moment du mail ;
 #                                     avec « tous », chacun garde ses heures)
 
 set -euo pipefail
 cd "$(dirname "$0")"
 source scripts/commun.sh
-
-HEURE_REGEX='^([01][0-9]|2[0-3]):[0-5][0-9]$'
 
 verifier_docker
 [[ -f .env ]] || erreur "Rien n'est encore installé : lance d'abord ./installer.sh"
@@ -26,15 +25,6 @@ while IFS= read -r service; do
 done <<<"$services"
 
 est_actif() { grep -qx "$1" <<<"$actifs"; }
-
-# reglage_de <nom> CLE → valeur du profil, sinon du .env (comme Docker Compose)
-reglage_de() {
-    if grep -q "^$2=" "profils/$1.env" 2>/dev/null; then
-        lire_reglage "profils/$1.env" "$2"
-    else
-        lire_reglage .env "$2"
-    fi
-}
 
 # heure_de <nom> → heure du mail (21:00 par défaut)
 heure_de() {
@@ -161,13 +151,15 @@ else
             options+=("Activer l'envoi automatique quotidien, aux heures de ton choix")
             actions+=(activer)
         fi
+        options+=("Modifier le profil (CV, mail, ville, critères, sources…)" "Supprimer ce profil")
+        actions+=(modifier supprimer)
         echo
         choisir "Que veux-tu faire pour « $nom » ?" "${options[@]}"
         action=${actions[REPONSE - 1]}
     fi
     case $action in
-        envoi | apercu | test-mail | profil | activer | heure | arreter) ;;
-        *) erreur "Action inconnue : $action (envoi, apercu, test-mail, profil, activer, heure ou arreter)" ;;
+        envoi | apercu | test-mail | profil | activer | heure | arreter | modifier | supprimer) ;;
+        *) erreur "Action inconnue : $action (envoi, apercu, test-mail, profil, activer, heure, arreter, modifier ou supprimer)" ;;
     esac
 
     # Heures de l'envoi automatique : en arguments, sinon demandées (Entrée = heure actuelle).
@@ -204,6 +196,44 @@ else
             ecrire_reglage "profils/$nom.env" SEARCH_AT "$nouvelle_recherche"
         fi
     fi
+fi
+
+# ─── Modification et suppression d'un profil ───────────────────────────
+if [[ $action == modifier ]]; then
+    exec ./ajouter_cv.sh --modifier "$nom"
+fi
+
+if [[ $action == supprimer ]]; then
+    echo
+    attention "Suppression de « $nom » : ses réglages, son CV et l'historique de ses offres seront effacés."
+    confirmer "Supprimer définitivement « $nom » ?" n || { echo "Annulé, rien n'a été supprimé."; exit 0; }
+    docker compose rm -sf "$nom" >/dev/null 2>&1 || true  # arrête et retire son conteneur
+    override=docker-compose.override.yml
+    if [[ -f $override ]] && grep -qx "  $nom:" "$override"; then
+        # Retire son bloc, de la ligne « <nom>: » jusqu'au service suivant
+        cp "$override" "$override.bak"
+        NOM=$nom awk '
+            $0 == "  " ENVIRON["NOM"] ":" { saute = 1; next }
+            saute && /^  [^ #][^:]*:[[:space:]]*$/ { saute = 0 }
+            !saute { print }
+        ' "$override.bak" > "$override"
+        if ! grep -qE '^  [^ #][^:]*:[[:space:]]*$' "$override"; then
+            rm -f "$override"  # plus aucune personne ajoutée
+        fi
+        if ! docker compose config --services >/dev/null 2>&1; then
+            mv "$override.bak" "$override"
+            erreur "Docker Compose refuse la configuration sans « $nom » : $override restauré, rien d'autre n'a été supprimé."
+        fi
+        rm -f "$override.bak"
+    fi
+    rm -f "profils/$nom.env"
+    rm -rf "data/$nom" 2>/dev/null || sudo rm -rf "data/$nom"  # fichiers créés par le conteneur
+    if [[ $nom == principal ]]; then
+        ok "Profil « principal » vidé. Il reste déclaré dans docker-compose.yml, mais sans CV il est ignoré : ./installer.sh pour le recréer."
+    else
+        ok "« $nom » a été supprimé."
+    fi
+    exit 0
 fi
 
 # ─── Exécution ─────────────────────────────────────────────────────────

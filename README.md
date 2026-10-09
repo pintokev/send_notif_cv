@@ -1,110 +1,284 @@
 # Veille d'offres d'emploi à partir d'un CV
 
-Chaque jour à heure fixe, l'appli :
+Tu donnes un CV (PDF) et une adresse mail. L'appli :
 
-1. **analyse ton CV (PDF)** avec Claude pour en déduire ton profil, les requêtes de recherche et les mots-clés (une seule fois, résultat mis en cache tant que le CV ne change pas) ;
-2. **collecte les offres récentes** autour de ta ville et/ou en télétravail sur :
+1. **analyse le CV** avec Claude pour en déduire le profil, les intitulés de poste à chercher et les mots-clés (une seule fois, tant que le CV ne change pas) ;
+2. **collecte les offres récentes** autour de la ville choisie et/ou en télétravail sur :
    - France Travail, Adzuna, Welcome to the Jungle ;
    - **Google Jobs**, qui regroupe LinkedIn, Indeed, APEC, HelloWork et des sites carrière ;
-   - **les sites carrière de tes entreprises cibles**, explorés par Claude avec la recherche web ;
+   - **les sites carrière des entreprises cibles**, explorés par Claude avec la recherche web ;
    - Remotive, Remote OK et Jobicy (100 % télétravail) ;
-3. **élimine les doublons** (même offre sur plusieurs sites, offres déjà vues les jours précédents) ;
+3. **élimine les doublons** (même offre sur plusieurs sites, offres déjà vues) ;
 4. **préfiltre par mots-clés** (gratuit) pour garder les offres les plus prometteuses ;
-5. **fait noter ces offres par Claude** de 0 à 100 avec une phrase d'explication ;
-6. **t'envoie un mail** avec les meilleures nouvelles offres.
+5. **fait noter ces offres par Claude** de 0 à 100, avec une phrase d'explication ;
+6. **envoie un mail** avec les meilleures nouvelles offres.
 
-Une offre n'est jamais envoyée deux fois. Les bonnes offres qui n'ont pas trouvé de place dans le mail du jour (limite `MAX_RESULTS`) restent candidates les jours suivants, pendant 7 jours.
+La recherche se lance à la demande, ou automatiquement chaque jour à l'heure choisie. Plusieurs personnes peuvent être suivies, chacune avec son CV, son adresse et ses critères.
 
-## Prérequis
+## Sommaire
+
+- [Démarrage rapide](#démarrage-rapide)
+- [Les scripts](#les-scripts) : [installer](#installer--la-mise-en-place), [ajouter_cv](#ajouter_cv--ajouter-une-personne), [lancer](#lancer--lutilisation-au-quotidien)
+- [L'envoi automatique](#lenvoi-automatique)
+- [Mettre à jour l'appli](#mettre-à-jour-lappli)
+- [Connexion à Claude : abonnement ou clé API](#connexion-à-claude--abonnement-ou-clé-api)
+- [Les sources d'offres](#les-sources-doffres)
+- [Réglages](#réglages)
+- [Coût et quotas](#coût-et-quotas)
+- [Pour aller plus loin](#pour-aller-plus-loin) : installation manuelle, commandes, structure
+- [Limites à connaître](#limites-à-connaître)
+
+## Démarrage rapide
+
+**Ce qu'il faut :**
 
 | Quoi | Obligatoire | Où l'obtenir |
 |---|---|---|
-| Clé API Claude **ou** abonnement Claude (Pro/Max) | oui, l'un des deux | voir [Clé API ou abonnement Claude](#clé-api-ou-abonnement-claude) |
-| Compte SMTP | oui | Gmail (mot de passe d'application : https://myaccount.google.com/apppasswords), OVH, Brevo… |
-| Identifiants France Travail | conseillé | https://francetravail.io → « Créer une application » → ajouter l'API **Offres d'emploi v2** |
-| Clé Adzuna | conseillé | https://developer.adzuna.com → inscription gratuite |
-| Clé SerpApi (Google Jobs) | conseillé | https://serpapi.com → inscription gratuite (250 recherches/mois) |
+| Docker | oui | Serveur Linux : https://docs.docker.com/engine/install/ · Windows ou Mac : [Docker Desktop](https://www.docker.com/products/docker-desktop/), lancé |
+| Abonnement Claude (Pro/Max) **ou** clé API Claude | oui, l'un des deux | voir [Connexion à Claude](#connexion-à-claude--abonnement-ou-clé-api) |
+| Une adresse mail pour envoyer les offres | oui | Gmail (avec un mot de passe d'application), OVH, ou tout compte SMTP |
+| Clés France Travail, Adzuna, SerpApi | non, mais conseillées | gratuites, voir [Les sources d'offres](#les-sources-doffres) |
 
-Welcome to the Jungle, Remotive, Remote OK et Jobicy ne demandent aucune clé. La recherche sur les sites carrière utilise Claude (clé API ou abonnement) et s'active dès que `TARGET_COMPANIES` est rempli. Une source sans identifiants est simplement ignorée.
+Python n'est pas nécessaire : tout tourne dans Docker.
 
-## Clé API ou abonnement Claude
+**Trois étapes :**
 
-L'appli a besoin de Claude pour trois tâches : analyser le CV, noter les offres et chercher sur les sites carrière. Deux façons de s'y connecter :
+1. Récupère le projet : `git clone git@github.com:pintokev/send_notif_cv.git`, ou sur GitHub « Code → Download ZIP », puis décompresse.
+2. Lance l'installation et réponds aux questions :
+   - Linux ou Mac, dans un terminal ouvert dans le dossier du projet : `./installer.sh`
+   - Windows : double-clic sur `installer.bat`
+3. Ensuite, pour une recherche quand tu veux, ou pour activer l'envoi automatique : `./lancer.sh` ou double-clic sur `lancer.bat`.
 
-| | Clé API | Abonnement Claude (Pro / Max) |
+## Les scripts
+
+Trois scripts, en deux versions qui font exactement la même chose :
+
+| Script | Linux, macOS | Windows | Sert à |
+|---|---|---|---|
+| **installer** | `./installer.sh` | `installer.bat` | la mise en place, une seule fois (et modifier les réglages communs plus tard) |
+| **ajouter_cv** | `./ajouter_cv.sh` | `ajouter_cv.bat` | ajouter une personne |
+| **lancer** | `./lancer.sh` | `lancer.bat` | tout le reste : recherches, envoi automatique, modification et suppression d'un profil |
+
+- **Linux, macOS** : ouvre un terminal dans le dossier du projet et tape la commande.
+- **Windows** : double-clique sur le fichier `.bat`. La fenêtre reste ouverte à la fin pour que tu puisses lire le résultat. Les `.bat` exécutent `scripts/windows.ps1`, avec PowerShell, inclus dans Windows.
+
+**Pour répondre aux questions :**
+- **Entrée** accepte la valeur proposée entre crochets, par exemple `[21:15]`.
+- `[O/n]` : Entrée vaut oui. `[o/N]` : Entrée vaut non.
+- Mots de passe, jetons et clés : la saisie reste **invisible**, c'est normal. Colle avec Ctrl+Maj+V dans un terminal Linux, ou clic droit sous Windows.
+- Pour un fichier (le CV), tu peux **glisser le fichier dans la fenêtre** au lieu de taper son chemin.
+
+Si Docker n'est pas installé ou pas démarré, les scripts s'arrêtent tout de suite avec un message qui indique quoi faire, sans rien modifier.
+
+### installer : la mise en place
+
+À lancer une fois au début. Il pose les questions dans cet ordre :
+
+1. **Connexion à Claude** : abonnement Pro/Max (il explique comment obtenir le jeton) ou clé API. Avec une clé API, il demande aussi le modèle : Opus (meilleur) ou Haiku (moins cher).
+2. **Envoi des mails** : Gmail, OVH ou autre serveur SMTP, puis l'adresse et le mot de passe. Pour Gmail, il explique comment créer le mot de passe d'application.
+3. **Sources d'offres facultatives** : identifiants France Travail, Adzuna et SerpApi. Entrée pour en passer une.
+
+Il écrit ces réponses dans le fichier `.env`. Si tu abandonnes en cours de route (Ctrl+C), aucun fichier à moitié rempli ne reste. Ensuite :
+
+4. il construit l'image Docker (quelques minutes la première fois) ;
+5. il envoie un **mail de test**. Si l'envoi échoue, il propose de ressaisir les paramètres du mail ;
+6. il crée le **premier profil**, nommé « principal », avec les mêmes questions que [ajouter_cv](#ajouter_cv--ajouter-une-personne).
+
+**Relancé plus tard**, il demande partie par partie si tu veux modifier Claude, le mail ou les sources. Entrée garde la valeur actuelle, et l'ancienne version du `.env` est gardée dans `.env.bak`. Il propose aussi d'ajouter une personne.
+
+### ajouter_cv : ajouter une personne
+
+Il pose les questions une par une :
+
+| Question | Remarque |
+|---|---|
+| Nom court | minuscules, chiffres et tirets (ex. `alice`) ; sert à désigner la personne dans `lancer` |
+| CV (PDF) | chemin du fichier, ou fichier glissé dans la fenêtre |
+| Adresse qui reçoit les offres | plusieurs possibles, séparées par des virgules |
+| Ville et rayon | vide = toute la France |
+| Télétravail | inclure ou non les offres 100 % télétravail |
+| Critères | en langage naturel, pris en compte par Claude dans la note (ex. « CDI uniquement, pas de management ») |
+| Mots à exclure | offres ignorées si leur intitulé contient un de ces mots (par défaut : stage, alternance) |
+| Entreprises cibles | Claude cherche sur leur site carrière, et leurs offres sont prioritaires (⭐ dans le mail) |
+| Sources | France Travail, Adzuna, Google Jobs : proposées seulement si leur clé est dans le `.env` |
+| Heure du mail | heure d'envoi quotidienne |
+| Heure de la recherche | si elle doit avoir lieu plus tôt que le mail, par exemple la nuit ; « non » = au moment du mail |
+| Score minimum, nombre d'offres max | ce qui figure dans le mail |
+| Recherches Google Jobs par jour | voir [le quota SerpApi](#le-quota-serpapi-google-jobs) |
+
+Il affiche un récapitulatif puis, après confirmation :
+
+1. copie le CV dans `data/<nom>/cv.pdf` ;
+2. crée les réglages de la personne dans `profils/<nom>.env` ;
+3. déclare son conteneur Docker (`job-alert-<nom>`) dans `docker-compose.override.yml`. Ce fichier est lu automatiquement par Docker Compose et ignoré par git : pas de conflit au `git pull`, et la liste des personnes reste privée ;
+4. propose une **première recherche**, avec ou sans envoi du mail ;
+5. propose d'**activer l'envoi automatique** quotidien. C'est facultatif.
+
+Si une étape échoue, tout ce qui a été créé est annulé.
+
+**Sur un serveur**, le CV doit d'abord y être copié. Depuis ton ordinateur : `scp cv.pdf utilisateur@ip-du-serveur:~/` (sans oublier les deux-points), puis indique `~/cv.pdf` au script.
+
+### lancer : l'utilisation au quotidien
+
+`./lancer.sh` (ou `lancer.bat`) demande d'abord **pour qui** (s'il y a plusieurs profils), puis **quoi faire** :
+
+| Option du menu | Ce qu'elle fait |
+|---|---|
+| Lancer une recherche et envoyer le mail | recherche complète tout de suite (2 à 5 minutes), puis envoi du mail |
+| Lancer une recherche sans envoyer de mail (aperçu) | même recherche, mais le mail est seulement enregistré dans `data/<nom>/last_email.html` (ouvert dans le navigateur sous Windows et Mac). Les offres trouvées partiront avec le prochain mail |
+| Envoyer un mail de test | vérifie que l'envoi des mails fonctionne |
+| Voir le profil déduit du CV | métier, niveau, intitulés de poste cherchés et mots-clés déduits par Claude |
+| Activer l'envoi automatique quotidien | demande l'heure du mail et l'heure de la recherche, puis lance l'envoi chaque jour |
+| Changer les heures de l'envoi automatique | (quand il est actif) modifie l'heure du mail et/ou de la recherche |
+| Arrêter l'envoi automatique quotidien | (quand il est actif) les recherches à la demande restent possibles |
+| Modifier le profil | mêmes questions que [ajouter_cv](#ajouter_cv--ajouter-une-personne), avec les valeurs actuelles proposées : Entrée garde, `-` vide (par exemple pour retirer les entreprises cibles). Pour le CV, Entrée garde l'actuel ; un nouveau fichier le remplace et sera réanalysé |
+| Supprimer ce profil | après confirmation, efface son conteneur, ses réglages, son CV et l'historique de ses offres |
+
+**Tous les profils** : s'il y a plusieurs personnes, le choix « Tous les profils » exécute l'action pour chacune, l'une après l'autre, puis affiche un récapitulatif. Un échec n'arrête pas les suivantes, et un profil sans CV est ignoré. Pour l'envoi automatique, chacun garde ses heures.
+
+**Sans menu**, en une commande (utile pour les habitués, ou pour un planificateur externe) :
+
+```bash
+./lancer.sh <nom> <action>     # Windows : lancer.bat <nom> <action>, dans un terminal ouvert dans le dossier
+```
+
+| Action | Exemple |
+|---|---|
+| `envoi` | `./lancer.sh alice envoi` |
+| `apercu` | `./lancer.sh tous apercu` |
+| `test-mail` | `./lancer.sh alice test-mail` |
+| `profil` | `./lancer.sh alice profil` |
+| `activer [mail [recherche]]` | `./lancer.sh alice activer 08:00 03:00` |
+| `heure mail [recherche]` | `./lancer.sh alice heure 08:00 non` (« non » = plus de recherche séparée) |
+| `arreter` | `./lancer.sh tous arreter` |
+| `modifier` | `./lancer.sh alice modifier` |
+| `supprimer` | `./lancer.sh alice supprimer` |
+
+Avec `heure` ou `activer`, si seule l'heure du mail est donnée, l'heure de recherche ne change pas.
+
+## L'envoi automatique
+
+Une fois activé (depuis `lancer`, ou à la fin de `installer` / `ajouter_cv`), le conteneur de la personne tourne en arrière-plan et lance chaque jour :
+
+- **soit tout à la même heure** : recherche puis mail, à l'heure du mail (`RUN_AT`) ;
+- **soit en deux temps** : la recherche à l'heure de recherche (`SEARCH_AT`, par exemple 03:00), puis le mail à l'heure du mail (par exemple 08:00). Entre les deux, les offres notées attendent dans l'historique.
+
+Le mode en deux temps est utile avec un abonnement Claude : la recherche consomme le quota la nuit, quand tu ne l'utilises pas. Avec plusieurs personnes, on peut aussi répartir les recherches sur des créneaux espacés.
+
+**Bon à savoir :**
+- **La machine et Docker doivent être allumés aux heures prévues.** Sur un serveur, lance une fois `sudo systemctl enable docker` : après un redémarrage, les envois automatiques repartent tout seuls. Sous Windows ou Mac, coche « Start Docker Desktop when you sign in » dans les réglages de Docker Desktop. Si la machine est éteinte, la recherche du jour est sautée ; les offres sont en général rattrapées le lendemain.
+- **Une offre n'est jamais envoyée deux fois**, même si tu lances aussi des recherches à la main. Les bonnes offres qui n'ont pas eu de place dans le mail (limite du nombre d'offres) restent candidates pendant 7 jours.
+- **Si la recherche de la nuit échoue**, un mail d'alerte arrive à l'heure du mail. Si elle n'a pas eu lieu (machine éteinte), le mail contient les offres en attente des jours précédents et le précise.
+- **Mail sans offre** : par défaut, un mail « Aucune nouvelle offre pertinente » est envoyé. Pour ne rien recevoir dans ce cas, mets `SEND_IF_EMPTY=false` dans le profil.
+- Sur un ordinateur personnel souvent éteint, lancer la recherche avec `lancer` quand tu le souhaites est souvent plus simple.
+
+## Mettre à jour l'appli
+
+```bash
+git pull
+./lancer.sh      # ou n'importe quel script
+```
+
+Si le code a changé, le script reconstruit l'image Docker (quelques secondes à quelques minutes) et relance les envois automatiques actifs avec la nouvelle version. Si rien n'a changé, il ne perd qu'environ une seconde.
+
+## Connexion à Claude : abonnement ou clé API
+
+L'appli utilise Claude pour trois tâches : analyser le CV, noter les offres et chercher sur les sites carrière. L'installeur te demande laquelle des deux connexions utiliser :
+
+| | Abonnement Claude (Pro / Max) | Clé API |
 |---|---|---|
-| Ce qu'il faut | Une clé sur https://platform.claude.com → API Keys | Un abonnement Claude, et Claude Code sur une machine pour générer un jeton |
-| Dans le `.env` | `ANTHROPIC_API_KEY=sk-ant-…` | `ANTHROPIC_API_KEY=` (vide) et `CLAUDE_CODE_OAUTH_TOKEN=…` |
-| Facturation | À l'usage (voir [Coût](#coût)) | Incluse dans l'abonnement, dans la limite de ses quotas |
-| Comment l'appli appelle Claude | Directement via l'API Anthropic | Via Claude Code, installé dans l'image Docker, en mode non interactif |
+| Ce qu'il faut | un abonnement, et Claude Code sur une machine pour générer un jeton (une seule fois) | une clé sur https://platform.claude.com → API Keys |
+| Dans le `.env` | `CLAUDE_CODE_OAUTH_TOKEN=…` et `ANTHROPIC_API_KEY=` vide | `ANTHROPIC_API_KEY=sk-ant-…` |
+| Facturation | incluse dans l'abonnement, dans la limite de ses quotas | à l'usage (voir [Coût et quotas](#coût-et-quotas)) |
 
-**Choix automatique** (`CLAUDE_BACKEND=auto`, par défaut) : si `ANTHROPIC_API_KEY` est renseignée, l'appli passe par l'API ; sinon, par l'abonnement. Pour forcer un mode : `CLAUDE_BACKEND=api` ou `CLAUDE_BACKEND=subscription`. Au début de chaque exécution, les logs indiquent le mode utilisé (`Claude : via l'API…` ou `Claude : via ton abonnement…`).
+**Obtenir le jeton d'abonnement** : sur une machine où [Claude Code](https://claude.com/claude-code) est installé et connecté à ton compte, tape `claude setup-token` dans un terminal, puis colle le jeton affiché dans l'installeur. Pas de Claude Code ? Installe-le juste pour cette étape (`curl -fsSL https://claude.ai/install.sh | bash` sous Linux et Mac, `irm https://claude.ai/install.ps1 | iex` dans PowerShell sous Windows). Le jeton se génère une seule fois et sert sur toutes tes machines. Garde-le secret, comme un mot de passe : il reste dans le `.env`, qui n'est jamais envoyé sur GitHub.
 
-### Utiliser son abonnement
+**Choix automatique** (`CLAUDE_BACKEND=auto`, par défaut) : si `ANTHROPIC_API_KEY` est renseignée, l'appli passe par l'API, sinon par l'abonnement. Les logs de chaque recherche indiquent le mode utilisé.
 
-1. Sur une machine où Claude Code est installé et connecté à ton abonnement (ton ordinateur, par exemple), lance :
-   ```bash
-   claude setup-token
-   ```
-   Suis les instructions : la commande affiche un jeton longue durée lié à ton abonnement.
-2. Dans le `.env` du serveur :
-   ```env
-   ANTHROPIC_API_KEY=
-   CLAUDE_CODE_OAUTH_TOKEN=le_jeton_affiché
-   ```
-3. Vérifie avec `docker compose run --rm principal python -m app run --dry-run`. Les logs doivent afficher `Claude : via ton abonnement (Claude Code)`.
+**À savoir avec un abonnement :**
+- **Quotas partagés** : les recherches consomment les mêmes limites que ton usage personnel de Claude (claude.ai, Claude Code). Voir [Coût et quotas](#coût-et-quotas).
+- **Usage personnel** : un abonnement est personnel. L'utiliser pour ta propre veille relève de ton usage. Pour traiter les CV d'autres personnes, vérifie que les conditions d'Anthropic le permettent, ou utilise une clé API.
+- Claude Code est installé dans l'image Docker (environ 420 Mo au total), même si tu utilises une clé API.
 
-Ce jeton donne accès à ton abonnement : garde-le secret, comme une clé API. Il reste dans le `.env`, qui n'est jamais envoyé sur GitHub.
+## Les sources d'offres
 
-**À savoir avant de choisir l'abonnement :**
-- **Quotas partagés** : les exécutions consomment les mêmes limites d'utilisation que ton usage personnel de Claude (Claude Code, claude.ai). Une exécution complète (CV, environ 60 offres notées, recherche sur les sites carrière) peut en prendre une part notable, surtout avec Opus et beaucoup d'entreprises cibles. Si la limite est atteinte, l'exécution échoue et un mail d'alerte est envoyé (`NOTIFY_ERRORS`).
-- **Conditions d'utilisation** : un abonnement est personnel. L'utiliser pour automatiser ta propre veille relève de ton usage. Pour traiter les CV d'autres personnes (voir [Plusieurs CV](#plusieurs-cv)), vérifie que les conditions d'Anthropic le permettent, ou utilise une clé API.
-- **Recherche sur les sites carrière** : en mode abonnement, Claude Code n'a pas de plafond strict par appel. La limite `CAREER_SEARCHES_PER_COMPANY` lui est donnée comme consigne, et il la respecte en général.
-- **Image Docker** : Claude Code est installé dans l'image (environ 420 Mo au total), même si tu utilises une clé API.
-
-## Installation simple (recommandé)
-
-Il faut seulement [Docker](https://docs.docker.com/engine/install/) sur un serveur Linux, ou [Docker Desktop](https://www.docker.com/products/docker-desktop/) sur un ordinateur Windows ou Mac, démarré. Récupère le projet (`git clone`, ou bouton « Code → Download ZIP » sur GitHub), puis :
-
-| | Linux, macOS | Windows |
+| Source | Clé | Comment l'obtenir |
 |---|---|---|
-| Installer | `./installer.sh` | double-clic sur `installer.bat` |
-| Lancer une recherche | `./lancer.sh` | double-clic sur `lancer.bat` |
-| Ajouter une personne | `./ajouter_cv.sh` | double-clic sur `ajouter_cv.bat` |
+| Welcome to the Jungle | aucune | — |
+| Remotive, Remote OK, Jobicy (100 % télétravail) | aucune | — |
+| Sites carrière des entreprises cibles | aucune (utilise Claude) | s'active dès que la personne a des entreprises cibles |
+| France Travail | identifiant + clé secrète | https://francetravail.io → « Créer une application » → ajouter l'API **Offres d'emploi v2** |
+| Adzuna | App ID + App Key | https://developer.adzuna.com → inscription gratuite |
+| Google Jobs (LinkedIn, Indeed, APEC, HelloWork…) | clé SerpApi | https://serpapi.com → inscription gratuite, 250 recherches par mois |
 
-**L'installeur** pose les questions une par une, avec les liens utiles :
+Une source sans clé est simplement ignorée. Pour ajouter une clé plus tard : relance `installer`. Chaque personne peut ensuite utiliser ou non les sources à clé (question dans `ajouter_cv`, ou « Modifier le profil » dans `lancer`).
 
-1. connexion à Claude (abonnement ou clé API), envoi des mails (Gmail, OVH ou autre), sources d'offres facultatives. Il crée le `.env` ;
-2. construit l'image Docker et envoie un mail de test. En cas d'échec, il propose de ressaisir les paramètres ;
-3. crée le premier profil (« principal ») : CV, adresse qui reçoit les offres, ville, critères…
-4. propose une première recherche, puis l'envoi automatique quotidien. Celui-ci est facultatif.
+**Comment se fait la recherche** : Claude déduit du CV jusqu'à 5 intitulés de poste (`MAX_QUERIES`), par exemple « Data analyst » ou « Analyste BI ». Chaque source est interrogée avec ces intitulés, autour de la ville et/ou en télétravail. Les offres des 2 derniers jours sont gardées (7 jours pour les sources à faible volume ou aux dates imprécises). Pour voir les intitulés déduits : `lancer`, puis « Voir le profil déduit du CV ». Pour les imposer : `SEARCH_QUERIES=` dans le profil.
 
-Relancé plus tard, il permet de modifier une partie du `.env` (l'ancienne version est gardée dans `.env.bak`) ou d'ajouter une personne.
+### Le quota SerpApi (Google Jobs)
 
-**`lancer`** déclenche une recherche à la demande, sans attendre l'heure prévue : avec envoi du mail, ou en aperçu, sans envoi (le mail est alors enregistré dans `data/<profil>/last_email.html`, et ouvert dans le navigateur sous Windows et macOS). Il permet aussi d'envoyer un mail de test, de voir le profil déduit du CV, et d'activer l'envoi automatique quotidien aux heures de ton choix, d'en changer les heures ou de l'arrêter. Sans question : `./lancer.sh <profil> <action>`, avec l'action `envoi`, `apercu`, `test-mail`, `profil`, `activer [mail [recherche]]`, `heure mail [recherche]` ou `arreter` (heures en `HH:MM`, recherche `non` pour la faire au moment du mail).
+Une recherche SerpApi correspond à une recherche Google (« Data analyst Lyon », « Data analyst télétravail »…) et renvoie environ 10 offres. Chaque profil en fait plusieurs par jour (`GOOGLEJOBS_SEARCHES_PER_RUN`, 6 au maximum par défaut), et l'offre gratuite en permet **250 par mois, partagées entre toutes les personnes qui utilisent Google Jobs**.
 
-Avec plusieurs profils, le choix « Tous les profils » (ou `./lancer.sh tous <action>`) exécute l'action pour chacun, l'un après l'autre, puis affiche un récapitulatif. Un échec n'arrête pas les profils suivants, et un profil sans CV est ignoré. L'envoi automatique y garde l'heure propre à chaque profil.
+`ajouter_cv` (et « Modifier le profil ») s'en occupe :
+- il **propose** un nombre de recherches par jour calculé pour rester dans le quota (250 ÷ 31 jours ÷ nombre de personnes : 6 pour une personne, 4 pour deux, 2 pour trois) ;
+- tu peux **choisir** un autre nombre ;
+- il affiche le **total mensuel** de toutes les personnes. S'il dépasse 250, il propose de **réduire les autres profils** qui sont au-dessus de leur part (ceux qui sont en dessous ne sont jamais augmentés) ; leur envoi automatique est alors relancé. Si tu refuses, il prévient que Google Jobs s'arrêtera avant la fin du mois.
 
-**Recherche la nuit, mail plus tard** : la recherche peut avoir lieu à une autre heure que le mail, par exemple à 03:00 pour un mail à 08:00. Les offres notées attendent l'heure du mail. `ajouter_cv` et `lancer` demandent les deux heures (réglages `SEARCH_AT` et `RUN_AT`). Avec un abonnement Claude, ça permet de ne pas consommer le quota pendant que tu l'utilises, et de répartir les recherches de plusieurs profils sur des fenêtres de 5 h différentes. Si la recherche de la nuit échoue, l'alerte arrive à l'heure du mail. Si elle n'a pas eu lieu (machine éteinte), le mail contient les offres notées les jours précédents et pas encore envoyées.
+L'appli vérifie aussi le solde SerpApi avant chaque recherche et n'en lance jamais plus qu'il n'en reste. Supprimer une personne ne redonne pas automatiquement de recherches aux autres : modifie leur profil pour remonter leur valeur.
 
-**Mise à jour** : après un `git pull`, lance simplement `lancer` (ou `installer`). Si le code a changé, l'image Docker est reconstruite et les envois automatiques actifs sont relancés avec la nouvelle version.
+## Réglages
 
-L'envoi automatique ne fonctionne que si la machine et Docker sont allumés à l'heure prévue. Sur un ordinateur personnel, lancer la recherche avec `lancer` quand tu le souhaites est souvent plus simple.
+Les réglages sont dans deux fichiers :
 
-Sous Windows, les fichiers `.bat` exécutent `scripts/windows.ps1` (PowerShell, inclus dans Windows).
+```
+.env                  réglages communs : connexion à Claude, envoi des mails, clés des sources…
+profils/<nom>.env     réglages de chaque personne : ils remplacent ceux du .env
+data/<nom>/           CV, historique des offres, cache du profil
+```
 
-## Installation manuelle sur le VPS
+Le plus simple est de passer par les scripts : `installer` pour le `.env`, « Modifier le profil » dans `lancer` pour une personne. Pour modifier un fichier à la main, applique ensuite le changement avec `docker compose up -d <nom>`, ou en réactivant l'envoi automatique dans `lancer`.
+
+Réglages utiles (tous commentés dans `.env.example`) :
+
+- **Résultats pas assez pertinents** : vérifie le profil déduit du CV, puis ajuste `SEARCH_QUERIES`, `EXTRA_KEYWORDS`, `EXCLUDE_KEYWORDS`, ou précise les critères (`CANDIDATE_PREFERENCES`, ex. « CDI uniquement, salaire > 45 k€, pas de poste managérial »).
+- **Trop ou pas assez d'offres dans le mail** : `MIN_SCORE` (score minimum) et `MAX_RESULTS` (nombre maximum).
+- **Modèle de Claude** : `CLAUDE_MODEL=claude-opus-5-5` (défaut, meilleure notation) ou `claude-haiku-5-5` (plus rapide, beaucoup moins cher et moins gourmand en quota, notation un peu moins fine).
+- **Nombre d'offres notées par Claude** : `PREFILTER_TOP_K` (60 par défaut). Le baisser réduit le coût et la consommation de quota.
+
+Un réglage invalide (heure mal écrite, nombre qui n'en est pas un…) ne bloque pas l'appli : il est remplacé par sa valeur par défaut et signalé dans les logs, et par mail au démarrage de l'envoi automatique.
+
+## Coût et quotas
+
+**Avec un abonnement Claude**, rien n'est facturé en plus, mais chaque recherche consomme ton quota. Ordre de grandeur pour une recherche : environ 100 000 tokens sans entreprises cibles, 200 000 à 350 000 avec 5 entreprises cibles. Pour mesurer ton cas : note ta consommation (claude.ai → Paramètres → Utilisation), lance un aperçu avec `lancer`, sans utiliser Claude entre-temps, puis compare. La première recherche coûte un peu plus, car elle inclut l'analyse du CV. Chaque personne compte séparément : deux profils, c'est environ deux fois plus.
+
+**Avec une clé API**, estimations par profil :
+
+| Poste | Coût estimé |
+|---|---|
+| Analyse du CV | une seule fois, quelques centimes |
+| Notation des offres avec Opus (défaut) | 0,50 à 1 $ par recherche |
+| Notation des offres avec Haiku | quelques centimes par recherche |
+| Sites carrière (recherche web) | 10 à 20 centimes par entreprise cible et par recherche |
+| Google Jobs (SerpApi) | gratuit jusqu'à 250 recherches par mois |
+
+La consommation réelle est visible dans la console Anthropic et sur le tableau de bord SerpApi. Pour réduire le coût ou le quota consommé, par ordre d'efficacité : passer à Haiku, baisser `PREFILTER_TOP_K`, avoir moins d'entreprises cibles (ou baisser `CAREER_SEARCHES_PER_COMPANY`).
+
+Pour voir le détail des tokens consommés : `docker compose run --rm <nom> python -m app run --dry-run -v`.
+
+## Pour aller plus loin
+
+### Installation manuelle (sans les scripts)
 
 ```bash
 # 1. Récupérer le projet
 git clone git@github.com:pintokev/send_notif_cv.git
 cd send_notif_cv
 
-# 2. Réglages communs (clé API Claude ou jeton d'abonnement, SMTP, sources…)
+# 2. Réglages communs (connexion à Claude, mail, sources…)
 cp .env.example .env
 nano .env
 
-# 3. Ton CV (service « principal » du docker-compose.yml)
+# 3. Le CV du profil « principal » (déclaré dans docker-compose.yml)
 mkdir -p data/principal
 cp /chemin/vers/ton_cv.pdf data/principal/cv.pdf
 sudo chown -R 1000:1000 data   # le conteneur tourne avec l'utilisateur 1000
@@ -115,126 +289,64 @@ docker compose run --rm principal python -m app test-mail       # mail de test
 docker compose run --rm principal python -m app profile         # profil déduit du CV
 docker compose run --rm principal python -m app run --dry-run   # recherche sans envoi
 
-# 5. Lancer pour de bon (redémarre automatiquement avec le VPS)
+# 5. Activer l'envoi automatique
 docker compose up -d
 docker compose logs -f
 ```
 
-Le conteneur reste actif et déclenche la recherche chaque jour à `RUN_AT` (21:00, heure de Paris par défaut), ou à `SEARCH_AT` si la recherche doit avoir lieu plus tôt que le mail. Si le VPS est éteint à l'heure prévue, la recherche du jour est sautée ; les offres seront rattrapées le lendemain grâce à la fenêtre `MAX_DAYS_OLD` de 2 jours.
+Pour ajouter une personne à la main : déclare un service dans `docker-compose.override.yml` sur le modèle du bloc `deuxieme` commenté dans `docker-compose.yml`, crée `profils/<nom>.env` à partir de `profils/exemple.env` (au minimum `MAIL_TO`, et redéfinis ou vide les réglages personnels du `.env`), puis dépose son CV dans `data/<nom>/cv.pdf`. Crée le dossier toi-même, sinon Docker le crée au nom de `root` et le conteneur ne peut pas y écrire.
 
-Pour que tout redémarre avec le VPS, Docker doit être lancé au démarrage (`sudo systemctl enable docker`). Utilise ensuite toujours `docker compose up -d` : après un `docker compose stop` ou `down`, le conteneur ne repart pas tout seul.
+Pour supprimer une personne à la main : `docker compose rm -sf <nom>`, retire son bloc de `docker-compose.override.yml`, puis efface `profils/<nom>.env` et `data/<nom>/`.
 
-## Plusieurs CV
+Attention : `docker compose up -d` sans nom de profil active l'envoi automatique de **tous** les profils.
 
-Chaque CV tourne dans son propre conteneur, avec son destinataire, ses réglages et son historique :
+### Commandes de l'appli
 
-```
-.env                    réglages communs (clés API, SMTP…)
-profils/<nom>.env       réglages propres à un CV : ils écrasent ceux de .env
-data/<nom>/cv.pdf       le CV, avec son historique et son cache
-```
-
-### Ajouter une personne avec le script (recommandé)
-
-Depuis le dossier du projet, sur le serveur :
-
-```bash
-./ajouter_cv.sh
-```
-
-Le script pose les questions une par une : nom, chemin du CV (PDF), adresse mail, ville et rayon, télétravail, critères, mots exclus, entreprises cibles, sources à utiliser, heure d'envoi, score minimum, nombre d'offres. Il affiche ensuite un récapitulatif et, après confirmation :
-
-1. copie le CV dans `data/<nom>/cv.pdf` et donne les droits au conteneur ;
-2. crée `profils/<nom>.env`. Tous les réglages personnels y sont écrits, même vides, pour que la personne n'hérite jamais des critères d'une autre via le `.env` commun ;
-3. déclare son conteneur `job-alert-<nom>` dans `docker-compose.override.yml`. Docker Compose lit ce fichier automatiquement en plus de `docker-compose.yml`, et il est ignoré par git : pas de conflit au `git pull`, et la liste des personnes reste privée ;
-4. propose une première recherche (avec ou sans envoi du mail), puis l'envoi automatique quotidien, qui reste facultatif.
-
-Pour les sources qui utilisent tes clés API (France Travail, Adzuna, Google Jobs), il demande si la personne doit les utiliser. Seules les sources dont la clé est dans le `.env` sont proposées. Le choix est écrit dans `SOURCES` de son profil : retire un nom de cette liste pour ne plus utiliser la source. Welcome to the Jungle et les sites télétravail sont gratuits et toujours interrogés. Les sites carrière ne le sont que si la personne a des entreprises cibles.
-
-Il calcule aussi le nombre de recherches Google Jobs par jour pour rester dans le quota gratuit de SerpApi, partagé entre les personnes qui utilisent Google Jobs. Pense à reporter cette valeur dans leurs profils, comme il te l'indique à la fin.
-
-Le CV doit d'abord être présent sur le serveur. Depuis ta machine : `scp cv.pdf user@ip-du-serveur:~/` (sans oublier les deux-points), puis indique `~/cv.pdf` au script.
-
-Pour **modifier** une personne : `nano profils/<nom>.env`, puis `docker compose up -d <nom>`. Pour la **supprimer** : `docker compose rm -sf <nom>`, retire son bloc de `docker-compose.override.yml`, puis supprime `profils/<nom>.env` et `data/<nom>/`.
-
-### Ajouter une personne à la main
-
-1. Dans `docker-compose.yml`, décommente le bloc `deuxieme` et remplace `deuxieme` par le nom choisi (ex. `alice`) partout.
-2. Crée ses réglages : `cp profils/exemple.env profils/alice.env`, puis renseigne au minimum `MAIL_TO`, et redéfinis (ou vide) les réglages personnels du `.env` : `CANDIDATE_PREFERENCES`, `TARGET_COMPANIES`, `LOCATION_CITY`, `EXCLUDE_KEYWORDS`.
-3. Dépose son CV : `mkdir -p data/alice && cp cv_alice.pdf data/alice/cv.pdf && sudo chown -R 1000:1000 data`. Crée bien le dossier toi-même : sinon Docker le crée au nom de `root` et le conteneur ne pourra pas y écrire.
-4. Vérifie avec `docker compose run --rm alice python -m app run --dry-run`, puis lance `docker compose up -d`.
-
-Dans les commandes, remplace `principal` par le nom du profil visé. `docker compose up -d` et `docker compose logs -f` agissent sur tous les CV à la fois.
-
-Le quota gratuit de SerpApi (250 recherches par mois) est partagé entre tous les CV qui utilisent Google Jobs : avec 2 CV, mets `GOOGLEJOBS_SEARCHES_PER_RUN=4` dans chaque profil. Pour qu'un CV n'utilise pas une source, retire-la de `SOURCES` dans son profil (ex. `SOURCES=francetravail,adzuna,wttj,careersites,remotive,remoteok,jobicy` sans Google Jobs). Les profils (`profils/*.env`) ne sont pas envoyés sur GitHub, sauf `profils/exemple.env`.
-
-## Commandes
+À lancer dans le conteneur : `docker compose run --rm <nom> python -m app <commande>`.
 
 | Commande | Rôle |
 |---|---|
-| `python -m app schedule` | Mode par défaut du conteneur : tourne en continu, lance la recherche chaque jour |
-| `python -m app run` | Lance une recherche et envoie le mail immédiatement |
-| `python -m app search` | Lance une recherche sans envoyer de mail : les offres notées attendent le prochain envoi |
-| `python -m app send [--dry-run]` | Envoie les offres déjà notées et pas encore envoyées |
-| `python -m app run --dry-run` | Lance une recherche sans envoyer de mail : affiche le résultat et écrit `data/<profil>/last_email.html` |
-| `python -m app profile [--refresh]` | Affiche le profil, les requêtes et les mots-clés déduits du CV (`--refresh` force une nouvelle analyse) |
-| `python -m app test-mail` | Envoie un mail de test |
+| `schedule` | mode par défaut du conteneur : tourne en continu, recherche et mail chaque jour |
+| `run` | recherche puis envoi du mail, tout de suite |
+| `run --dry-run` | recherche sans envoi : affiche le résultat et écrit `data/<nom>/last_email.html` |
+| `search` | recherche sans envoi : les offres notées attendent le prochain mail |
+| `send [--dry-run]` | envoie les offres déjà notées et pas encore envoyées |
+| `profile [--refresh]` | affiche le profil déduit du CV (`--refresh` force une nouvelle analyse) |
+| `test-mail` | envoie un mail de test |
 
-Ajoute `-v` pour des logs détaillés (dont la consommation de tokens). Avec Docker : `docker compose run --rm principal python -m app <commande>` (remplace `principal` par le nom du profil).
+Ajoute `-v` pour des logs détaillés, dont la consommation de tokens.
 
-## Réglages utiles
+### Structure du projet
 
-Les réglages sont dans `.env` (voir `.env.example`, chaque variable y est commentée), éventuellement redéfinis par CV dans `profils/<nom>.env`.
-
-- **Résultats pas assez pertinents** : vérifie `python -m app profile`, puis ajuste `SEARCH_QUERIES`, `EXTRA_KEYWORDS`, `EXCLUDE_KEYWORDS`, ou décris tes critères dans `CANDIDATE_PREFERENCES` (ex. « CDI uniquement, salaire > 45 k€, pas de poste managérial »). Claude en tient compte dans la note.
-- **Entreprises qui t'intéressent particulièrement** : `TARGET_COMPANIES=L'Oréal,LVMH,Decathlon`. Claude va chercher chaque jour sur leur site carrière, et leurs offres venant de toutes les sources sont prioritaires et marquées d'une ⭐ dans le mail.
-- **Trop ou pas assez d'offres dans le mail** : `MIN_SCORE` et `MAX_RESULTS`.
-- **Mise à jour du CV** : remplace `data/<profil>/cv.pdf`. Il sera réanalysé automatiquement à la prochaine exécution.
-- **Changer l'heure** : `./lancer.sh <profil> heure 08:30`, ou `RUN_AT=08:30` (et `SEARCH_AT=03:00` pour une recherche plus tôt) dans le profil, puis `docker compose up -d <profil>` pour appliquer.
-- **Après une modification du `.env` ou d'un profil** : `docker compose up -d` (les conteneurs concernés sont recréés).
-
-## Coût
-
-| Poste | Coût estimé |
-|---|---|
-| **Avec un abonnement Claude** | **rien de plus que l'abonnement** : tout ce qui concerne Claude ci-dessous est inclus, dans la limite des quotas |
-| Analyse du CV | une seule fois, quelques centimes |
-| Notation des offres, `CLAUDE_MODEL=claude-opus-5-5` (défaut) | 0,50 à 1 $ par jour |
-| Notation des offres, `CLAUDE_MODEL=claude-haiku-5-5` | quelques centimes par jour (notation un peu moins fine) |
-| Google Jobs (SerpApi) | gratuit jusqu'à 250 recherches par mois (6 par jour par défaut) |
-| Sites carrière (recherche web Claude) | 10 à 20 centimes par entreprise et par jour : 1 centime par recherche, plus le texte des pages lues |
-
-Les lignes Claude ci-dessus concernent le mode clé API. Ce sont des estimations : la consommation réelle est visible dans la console Anthropic et sur le tableau de bord SerpApi. Pour réduire le coût : baisser `PREFILTER_TOP_K`, `CAREER_SEARCHES_PER_COMPANY` ou le nombre d'entreprises cibles.
+```
+installer.sh / .bat    installation guidée : .env, mail de test, premier profil
+ajouter_cv.sh / .bat   ajout d'une personne (et modification, via lancer)
+lancer.sh / .bat       recherches à la demande, envoi automatique, modification et suppression
+scripts/
+  commun.sh            fonctions communes aux scripts .sh
+  windows.ps1          version Windows des trois scripts, appelée par les .bat
+app/
+  __main__.py          commandes et planificateur
+  pipeline.py          recherche (collecte, préfiltre, notation) et envoi du mail
+  config.py            lecture des réglages
+  candidate.py         lecture du CV et extraction du profil par Claude
+  llm.py               appels à Claude : via l'API, ou aiguillage vers claude_code.py
+  claude_code.py       appels à Claude via Claude Code (abonnement)
+  sources/             un fichier par source d'offres
+  prefilter.py         tri gratuit par mots-clés
+  scorer.py            notation des offres par Claude
+  storage.py           historique SQLite (data/<nom>/jobs.sqlite3)
+  mailer.py            composition et envoi du mail
+  templates/           modèle HTML du mail
+profils/               réglages de chaque personne (exemple.env fourni)
+data/<nom>/            CV, historique, cache du profil, dernier aperçu
+```
 
 ## Limites à connaître
 
-- **LinkedIn et Indeed** n'ont pas d'API publique et interdisent le scraping. Adzuna agrège une partie des offres présentes sur ces sites.
-- **Welcome to the Jungle** n'a pas d'API officielle : l'appli interroge l'index de recherche public de leur site. Si celui-ci change, cette source tombera en erreur (signalé en bas du mail) sans bloquer les autres.
-- **Remotive** publie ses offres avec un délai et en petit nombre. Les sites 100 % télétravail, Google Jobs (qui ne trie pas par date) et les sites carrière sont donc interrogés sur 7 jours (`EXTENDED_MAX_DAYS_OLD`) au lieu de 2. Le dédoublonnage évite de recevoir deux fois la même offre. Les offres télétravail réservées aux résidents d'autres pays (ex. « USA only ») sont écartées.
-- **Google Jobs** renvoie environ 10 offres par recherche. Avec l'offre gratuite de SerpApi, on ne demande pas les pages suivantes.
-- **Sites carrière** : Claude ne voit que ce que la recherche web trouve. Les sites qui chargent leurs offres en JavaScript sont parfois mal couverts. Pour éviter tout lien inventé, une offre n'est gardée que si son lien apparaît réellement dans les pages trouvées.
-- En cas d'échec complet d'une exécution, un mail d'alerte est envoyé (`NOTIFY_ERRORS`).
-
-## Structure
-
-```
-app/
-  __main__.py      commandes et planificateur
-  pipeline.py      enchaînement complet d'une exécution
-  candidate.py     lecture du CV et extraction du profil par Claude
-  llm.py           appels à Claude : via l'API (clé API), ou aiguillage vers claude_code.py
-  claude_code.py   appels à Claude via Claude Code (abonnement)
-  sources/         un fichier par source (sites d'offres, Google Jobs, sites carrière)
-  prefilter.py     tri gratuit par mots-clés
-  scorer.py        notation des offres par Claude
-  storage.py       historique SQLite (data/<profil>/jobs.sqlite3)
-  mailer.py        composition et envoi du mail
-  templates/       modèle HTML du mail
-installer.sh       installation guidée : .env, mail de test, premier profil
-lancer.sh          recherche à la demande, activation de l'envoi automatique
-ajouter_cv.sh      ajout interactif d'une personne (CV + mail)
-*.bat              mêmes scripts pour Windows (double-clic), via scripts/windows.ps1
-scripts/           fonctions communes aux scripts .sh, version Windows
-profils/           réglages propres à chaque CV (exemple.env fourni)
-data/<profil>/     CV, cache du profil, base SQLite (volume Docker)
-```
+- **LinkedIn et Indeed** n'ont pas d'API publique et interdisent la collecte automatique. Google Jobs et Adzuna en reprennent une partie.
+- **Welcome to the Jungle** n'a pas d'API officielle : l'appli interroge l'index de recherche public de leur site. S'il change, cette source tombera en erreur (signalé en bas du mail) sans bloquer les autres.
+- **Remotive** publie peu d'offres, avec un délai. Les sites 100 % télétravail, Google Jobs (qui ne trie pas par date) et les sites carrière sont donc interrogés sur 7 jours (`EXTENDED_MAX_DAYS_OLD`) au lieu de 2. Les offres télétravail réservées aux résidents d'autres pays (ex. « USA only ») sont écartées.
+- **Google Jobs** renvoie environ 10 offres par recherche ; avec l'offre gratuite de SerpApi, les pages suivantes ne sont pas demandées.
+- **Sites carrière** : Claude ne voit que ce que la recherche web trouve. Les sites qui chargent leurs offres en JavaScript sont parfois mal couverts. Une offre n'est gardée que si son lien apparaît réellement dans les pages trouvées, pour éviter tout lien inventé.
+- **Abonnement Claude** : si la limite d'utilisation est atteinte pendant une recherche, elle échoue et un mail d'alerte est envoyé (`NOTIFY_ERRORS`).

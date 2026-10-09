@@ -14,9 +14,28 @@ from .mailer import send_email
 from .pipeline import run, run_safely, search, search_safely, send, send_safely
 
 
+def warn_invalid_settings(settings) -> None:
+    """Prévient par mail des réglages invalides : en mode planifié, personne ne lit les logs."""
+    if not settings.warnings or not settings.notify_errors:
+        return
+    try:
+        send_email(
+            settings,
+            "⚠️ Réglage invalide dans la veille d'offres d'emploi",
+            "Ces réglages (.env ou profil) sont invalides et ont été remplacés :\n\n- "
+            + "\n- ".join(settings.warnings)
+            + "\n\nCorrige-les, puis relance l'envoi automatique (lancer, « Changer les heures », "
+            "ou docker compose up -d).",
+        )
+    except Exception:
+        logging.exception("Impossible d'envoyer le mail signalant les réglages invalides")
+
+
 def schedule(settings) -> None:
     from apscheduler.schedulers.blocking import BlockingScheduler
     from apscheduler.triggers.cron import CronTrigger
+
+    warn_invalid_settings(settings)
 
     scheduler = BlockingScheduler(timezone=settings.timezone)
 
@@ -72,6 +91,8 @@ def main() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     settings = load_settings()
+    for warning in settings.warnings:
+        logging.warning("Réglage invalide : %s", warning)
     if args.command == "run":
         run(settings, dry_run=args.dry_run)
     elif args.command == "search":

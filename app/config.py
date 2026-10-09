@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
 ALL_SOURCES = ["francetravail", "adzuna", "wttj", "googlejobs", "careersites", "remotive", "remoteok", "jobicy"]
+TIME_RE = re.compile(r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$")
+
+# Réglages invalides remplacés par leur valeur par défaut, signalés au démarrage (logs et mail) :
+# une faute de frappe dans le .env ne doit pas faire planter le conteneur en boucle.
+_warnings: list[str] = []
 
 
 def _str(name: str, default: str = "") -> str:
@@ -17,7 +24,36 @@ def _str(name: str, default: str = "") -> str:
 
 def _int(name: str, default: int) -> int:
     value = _str(name)
-    return int(value) if value else default
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        _warnings.append(f"{name}={value} n'est pas un nombre entier : valeur par défaut {default} utilisée.")
+        return default
+
+
+def _time(name: str, default: str) -> str:
+    """Heure HH:MM (ex. 08:30 ou 8:30) ; vide = default."""
+    value = _str(name)
+    if not value:
+        return default
+    match = TIME_RE.match(value)
+    if match is None:
+        fallback = f"valeur par défaut {default} utilisée" if default else "ignorée"
+        _warnings.append(f"{name}={value} n'est pas une heure au format HH:MM (ex. 08:30) : {fallback}.")
+        return default
+    return f"{int(match[1]):02d}:{match[2]}"
+
+
+def _timezone(name: str, default: str) -> str:
+    value = _str(name, default)
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        _warnings.append(f"{name}={value} n'est pas un fuseau horaire connu : {default} utilisé.")
+        return default
+    return value
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -93,6 +129,9 @@ class Settings:
     timezone: str = "Europe/Paris"
     run_on_start: bool = False
 
+    # Réglages invalides remplacés par leur valeur par défaut (voir _warnings)
+    warnings: list[str] = field(default_factory=list)
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "jobs.sqlite3"
@@ -120,12 +159,13 @@ def _claude_backend() -> str:
     if backend in {"api", "subscription"}:
         return backend
     if backend != "auto":
-        raise ValueError(f"CLAUDE_BACKEND invalide : {backend!r} (auto, api ou subscription)")
+        _warnings.append(f"CLAUDE_BACKEND={backend} invalide (auto, api ou subscription) : auto utilisé.")
     return "api" if _str("ANTHROPIC_API_KEY") else "subscription"
 
 
 def load_settings() -> Settings:
     load_dotenv()
+    _warnings.clear()
     data_dir = Path(_str("DATA_DIR", "/data"))
     smtp_user = _str("SMTP_USER")
     return Settings(
@@ -164,8 +204,9 @@ def load_settings() -> Settings:
         mail_to=_list("MAIL_TO"),
         send_if_empty=_bool("SEND_IF_EMPTY", True),
         notify_errors=_bool("NOTIFY_ERRORS", True),
-        run_at=_str("RUN_AT", "21:00"),
-        search_at=_str("SEARCH_AT"),
-        timezone=_str("TZ", "Europe/Paris"),
+        run_at=_time("RUN_AT", "21:00"),
+        search_at=_time("SEARCH_AT", ""),
+        timezone=_timezone("TZ", "Europe/Paris"),
         run_on_start=_bool("RUN_ON_START", False),
+        warnings=list(_warnings),
     )
