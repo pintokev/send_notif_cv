@@ -346,6 +346,15 @@ function Installer {
 
 # ─── ajouter : nouvelle personne ───────────────────────────────────────
 
+# Utilise-Google nom → $true si cette personne interroge Google Jobs
+# (SOURCES de son profil, sinon celui du .env ; vide = toutes les sources)
+function Utilise-Google([string]$Nom) {
+    $fichier = "profils\$Nom.env"
+    if (-not ((Test-Path -LiteralPath $fichier) -and (Select-String -LiteralPath $fichier -Pattern '^SOURCES=' -Quiet))) { $fichier = '.env' }
+    $valeur = (Lire-Reglage $fichier SOURCES) -replace '\s', ''
+    return (-not $valeur -or ",$valeur," -like '*,googlejobs,*')
+}
+
 function Ajouter-Personne([switch]$Principal) {
     if (-not (Test-Path -LiteralPath '.env')) { Erreur "Fichier .env introuvable : lance d'abord installer.bat." }
     $existants = @(Services-Compose)
@@ -405,6 +414,23 @@ function Ajouter-Personne([switch]$Principal) {
     $exclusions = Demander 'Mots à exclure des intitulés, séparés par des virgules' 'stage,alternance'
     $entreprises = Demander 'Entreprises cibles, séparées par des virgules (vide = aucune)'
 
+    # Sources à clé : proposées seulement si leur clé est dans le .env. Une source sans clé reste
+    # dans la liste (elle est ignorée tant que la clé manque), pour s'activer dès qu'on l'ajoute.
+    # WTTJ et les sites télétravail sont gratuits et toujours interrogés ; les sites carrière
+    # le sont dès que la personne a des entreprises cibles.
+    $exclues = @()
+    $aCle = @{
+        francetravail = [bool](Lire-Reglage '.env' FRANCETRAVAIL_CLIENT_ID)
+        adzuna        = [bool](Lire-Reglage '.env' ADZUNA_APP_ID)
+        googlejobs    = [bool](Lire-Reglage '.env' SERPAPI_API_KEY)
+    }
+    if ($aCle.Values -contains $true) { Write-Host ''; Info "Sources d'offres utilisant tes clés API" }
+    if ($aCle.francetravail -and -not (Confirmer 'Chercher sur France Travail ?' 'o')) { $exclues += 'francetravail' }
+    if ($aCle.adzuna -and -not (Confirmer 'Chercher sur Adzuna ?' 'o')) { $exclues += 'adzuna' }
+    if ($aCle.googlejobs -and -not (Confirmer 'Chercher sur Google Jobs (LinkedIn, Indeed, APEC… ; quota SerpApi partagé entre les personnes) ?' 'o')) { $exclues += 'googlejobs' }
+    $sources = (@('francetravail', 'adzuna', 'wttj', 'googlejobs', 'careersites', 'remotive', 'remoteok', 'jobicy') |
+        Where-Object { $exclues -notcontains $_ }) -join ','
+
     # Envoi
     Write-Host ''
     Info 'Envoi du mail'
@@ -412,9 +438,10 @@ function Ajouter-Personne([switch]$Principal) {
     do { $score = Demander "Score minimum (0-100) pour qu'une offre figure dans le mail" '60' } until ($score -match '^[0-9]+$' -and [int]$score -le 100)
     do { $maxOffres = Demander "Nombre maximum d'offres par mail" '15' } until ($maxOffres -match '^[1-9][0-9]*$')
 
-    # Quota SerpApi gratuit (250 recherches/mois) partagé entre toutes les personnes
-    $nbPersonnes = $existants.Count + $(if ($Principal) { 0 } else { 1 })
-    $recherchesGoogle = [Math]::Max(1, [Math]::Min(6, [Math]::Floor(250 / (31 * $nbPersonnes))))
+    # Quota SerpApi gratuit (250 recherches/mois) partagé entre les personnes qui utilisent Google Jobs
+    $google = $exclues -notcontains 'googlejobs'
+    $nbGoogle = @($existants | Where-Object { $_ -ne $nom -and (Utilise-Google $_) }).Count + $(if ($google) { 1 } else { 0 })
+    $recherchesGoogle = [Math]::Max(1, [Math]::Min(6, [Math]::Floor(250 / (31 * [Math]::Max(1, $nbGoogle)))))
 
     Write-Host ''
     Info '═══ Récapitulatif ═══'
@@ -427,7 +454,8 @@ function Ajouter-Personne([switch]$Principal) {
     Write-Host "  Mots exclus        : $(if ($exclusions) { $exclusions } else { 'aucun' })"
     Write-Host "  Entreprises cibles : $(if ($entreprises) { $entreprises } else { 'aucune' })"
     Write-Host "  Envoi              : tous les jours à $heure, score ≥ $score, $maxOffres offres max"
-    Write-Host "  Google Jobs        : $recherchesGoogle recherches par jour (quota SerpApi partagé entre $nbPersonnes personnes)"
+    Write-Host "  Sources            : $sources"
+    if ($google) { Write-Host "  Google Jobs        : $recherchesGoogle recherches par jour (quota SerpApi partagé entre $nbGoogle personnes)" }
     Write-Host ''
     if (-not (Confirmer 'Créer cette personne ?' 'o')) { Write-Host "Annulé, rien n'a été modifié."; return }
 
@@ -464,7 +492,9 @@ RUN_AT=$heure
 MIN_SCORE=$score
 MAX_RESULTS=$maxOffres
 
-# Quota SerpApi gratuit (250 recherches/mois) partagé entre toutes les personnes
+# Sources interrogées (retirer un nom pour ne plus l'utiliser)
+SOURCES=$sources
+# Quota SerpApi gratuit (250 recherches/mois) partagé entre les personnes qui utilisent Google Jobs
 GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
 
 "@
@@ -534,9 +564,9 @@ GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
         Write-Host "Pour l'activer plus tard : lancer.bat"
     }
 
-    if ($nbPersonnes -gt 1) {
+    if ($google -and $nbGoogle -gt 1) {
         Write-Host ''
-        Info "Pense au quota Google Jobs : mets GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle dans le profil de chaque personne"
+        Info "Pense au quota Google Jobs : mets GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle dans le profil de chaque personne qui l'utilise"
         Info "(et dans le .env pour « principal » s'il n'a pas de profils\principal.env), puis : docker compose up -d"
     }
 }

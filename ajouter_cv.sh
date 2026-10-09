@@ -103,6 +103,29 @@ exclusions=$REPONSE
 demander "Entreprises cibles, séparées par des virgules (vide = aucune)" ""
 entreprises=$REPONSE
 
+# Sources à clé : proposées seulement si leur clé est dans le .env. Une source sans clé reste
+# dans la liste (elle est ignorée tant que la clé manque), pour s'activer dès qu'on l'ajoute.
+# WTTJ et les sites télétravail sont gratuits et toujours interrogés ; les sites carrière
+# le sont dès que la personne a des entreprises cibles.
+exclues=" "
+if [[ -n $(lire_reglage .env FRANCETRAVAIL_CLIENT_ID)$(lire_reglage .env ADZUNA_APP_ID)$(lire_reglage .env SERPAPI_API_KEY) ]]; then
+    echo
+    info "Sources d'offres utilisant tes clés API"
+fi
+if [[ -n $(lire_reglage .env FRANCETRAVAIL_CLIENT_ID) ]] && ! confirmer "Chercher sur France Travail ?" o; then
+    exclues+="francetravail "
+fi
+if [[ -n $(lire_reglage .env ADZUNA_APP_ID) ]] && ! confirmer "Chercher sur Adzuna ?" o; then
+    exclues+="adzuna "
+fi
+if [[ -n $(lire_reglage .env SERPAPI_API_KEY) ]] && ! confirmer "Chercher sur Google Jobs (LinkedIn, Indeed, APEC… ; quota SerpApi partagé entre les personnes) ?" o; then
+    exclues+="googlejobs "
+fi
+sources=""
+for source in francetravail adzuna wttj googlejobs careersites remotive remoteok jobicy; do
+    if [[ $exclues != *" $source "* ]]; then sources+=${sources:+,}$source; fi
+done
+
 # ─── 5. Envoi ──────────────────────────────────────────────────────────
 echo
 info "Envoi du mail"
@@ -122,10 +145,27 @@ while true; do
     echo "  → un nombre entier positif."
 done
 
-# Quota SerpApi gratuit (250 recherches/mois) partagé entre toutes les personnes
-nb_personnes=$(echo "$existants" | grep -c .)
-$principal || nb_personnes=$((nb_personnes + 1))
-recherches_google=$(( 250 / (31 * nb_personnes) ))
+# utilise_google <nom> : vrai si cette personne interroge Google Jobs
+# (SOURCES de son profil, sinon celui du .env ; vide = toutes les sources)
+utilise_google() {
+    local fichier=profils/$1.env valeur
+    grep -q '^SOURCES=' "$fichier" 2>/dev/null || fichier=.env
+    valeur=$(lire_reglage "$fichier" SOURCES)
+    valeur=${valeur// /}
+    [[ -z $valeur || ,$valeur, == *,googlejobs,* ]]
+}
+
+# Quota SerpApi gratuit (250 recherches/mois) partagé entre les personnes qui utilisent Google Jobs
+google=false
+[[ ,$sources, == *,googlejobs,* ]] && google=true
+nb_google=0
+while IFS= read -r service; do
+    if [[ -n $service && $service != "$nom" ]] && utilise_google "$service"; then
+        nb_google=$((nb_google + 1))
+    fi
+done <<<"$existants"
+$google && nb_google=$((nb_google + 1))
+recherches_google=$(( 250 / (31 * (nb_google > 0 ? nb_google : 1)) ))
 (( recherches_google < 1 )) && recherches_google=1
 (( recherches_google > 6 )) && recherches_google=6
 
@@ -142,8 +182,11 @@ cat <<EOF
   Mots exclus        : ${exclusions:-aucun}
   Entreprises cibles : ${entreprises:-aucune}
   Envoi              : tous les jours à $heure, score ≥ $score, $max_offres offres max
-  Google Jobs        : $recherches_google recherches par jour (quota SerpApi partagé entre $nb_personnes personnes)
+  Sources            : $sources
 EOF
+if $google; then
+    echo "  Google Jobs        : $recherches_google recherches par jour (quota SerpApi partagé entre $nb_google personnes)"
+fi
 echo
 confirmer "Créer cette personne ?" o || { echo "Annulé, rien n'a été modifié."; exit 0; }
 
@@ -193,7 +236,9 @@ RUN_AT=$heure
 MIN_SCORE=$score
 MAX_RESULTS=$max_offres
 
-# Quota SerpApi gratuit (250 recherches/mois) partagé entre toutes les personnes
+# Sources interrogées (retirer un nom pour ne plus l'utiliser)
+SOURCES=$sources
+# Quota SerpApi gratuit (250 recherches/mois) partagé entre les personnes qui utilisent Google Jobs
 GOOGLEJOBS_SEARCHES_PER_RUN=$recherches_google
 EOF
 chmod 600 "profils/$nom.env"
@@ -261,9 +306,9 @@ else
     echo "Pour l'activer plus tard : ./lancer.sh $nom"
 fi
 
-if (( nb_personnes > 1 )); then
+if $google && (( nb_google > 1 )); then
     echo
-    info "Pense au quota Google Jobs : mets GOOGLEJOBS_SEARCHES_PER_RUN=$recherches_google dans le profil de chaque personne"
+    info "Pense au quota Google Jobs : mets GOOGLEJOBS_SEARCHES_PER_RUN=$recherches_google dans le profil de chaque personne qui l'utilise"
     info "(et dans le .env pour « principal » s'il n'a pas de profils/principal.env), puis : docker compose up -d"
 fi
 echo

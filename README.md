@@ -136,14 +136,16 @@ Depuis le dossier du projet, sur le serveur :
 ./ajouter_cv.sh
 ```
 
-Le script pose les questions une par une : nom, chemin du CV (PDF), adresse mail, ville et rayon, télétravail, critères, mots exclus, entreprises cibles, heure d'envoi, score minimum, nombre d'offres. Il affiche ensuite un récapitulatif et, après confirmation :
+Le script pose les questions une par une : nom, chemin du CV (PDF), adresse mail, ville et rayon, télétravail, critères, mots exclus, entreprises cibles, sources à utiliser, heure d'envoi, score minimum, nombre d'offres. Il affiche ensuite un récapitulatif et, après confirmation :
 
 1. copie le CV dans `data/<nom>/cv.pdf` et donne les droits au conteneur ;
 2. crée `profils/<nom>.env`. Tous les réglages personnels y sont écrits, même vides, pour que la personne n'hérite jamais des critères d'une autre via le `.env` commun ;
 3. déclare son conteneur `job-alert-<nom>` dans `docker-compose.override.yml`. Docker Compose lit ce fichier automatiquement en plus de `docker-compose.yml`, et il est ignoré par git : pas de conflit au `git pull`, et la liste des personnes reste privée ;
 4. propose une première recherche (avec ou sans envoi du mail), puis l'envoi automatique quotidien, qui reste facultatif.
 
-Il calcule aussi le nombre de recherches Google Jobs par jour pour rester dans le quota gratuit de SerpApi, partagé entre toutes les personnes. Pense à reporter cette valeur dans les profils existants, comme il te l'indique à la fin.
+Pour les sources qui utilisent tes clés API (France Travail, Adzuna, Google Jobs), il demande si la personne doit les utiliser. Seules les sources dont la clé est dans le `.env` sont proposées. Le choix est écrit dans `SOURCES` de son profil : retire un nom de cette liste pour ne plus utiliser la source. Welcome to the Jungle et les sites télétravail sont gratuits et toujours interrogés. Les sites carrière ne le sont que si la personne a des entreprises cibles.
+
+Il calcule aussi le nombre de recherches Google Jobs par jour pour rester dans le quota gratuit de SerpApi, partagé entre les personnes qui utilisent Google Jobs. Pense à reporter cette valeur dans leurs profils, comme il te l'indique à la fin.
 
 Le CV doit d'abord être présent sur le serveur. Depuis ta machine : `scp cv.pdf user@ip-du-serveur:~/` (sans oublier les deux-points), puis indique `~/cv.pdf` au script.
 
@@ -158,7 +160,7 @@ Pour **modifier** une personne : `nano profils/<nom>.env`, puis `docker compose 
 
 Dans les commandes, remplace `principal` par le nom du profil visé. `docker compose up -d` et `docker compose logs -f` agissent sur tous les CV à la fois.
 
-Le quota gratuit de SerpApi (250 recherches par mois) est partagé entre tous les CV : avec 2 CV, mets `GOOGLEJOBS_SEARCHES_PER_RUN=4` dans chaque profil. Les profils (`profils/*.env`) ne sont pas envoyés sur GitHub, sauf `profils/exemple.env`.
+Le quota gratuit de SerpApi (250 recherches par mois) est partagé entre tous les CV qui utilisent Google Jobs : avec 2 CV, mets `GOOGLEJOBS_SEARCHES_PER_RUN=4` dans chaque profil. Pour qu'un CV n'utilise pas une source, retire-la de `SOURCES` dans son profil (ex. `SOURCES=francetravail,adzuna,wttj,careersites,remotive,remoteok,jobicy` sans Google Jobs). Les profils (`profils/*.env`) ne sont pas envoyés sur GitHub, sauf `profils/exemple.env`.
 
 ## Commandes
 
