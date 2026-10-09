@@ -57,6 +57,25 @@ lire_reglage() {
     printf '%s' "$valeur"
 }
 
+# ecrire_reglage fichier CLE valeur : remplace la ligne CLE= du fichier (ou l'ajoute ; crée le fichier).
+# Les guillemets simples empêchent Docker Compose d'interpréter les « $ » d'un mot de passe.
+ecrire_reglage() {
+    local fichier=$1 valeur=$3
+    if [[ -n $valeur && $valeur != *"'"* ]]; then
+        valeur="'$valeur'"
+    fi
+    if [[ ! -f $fichier ]]; then
+        (umask 077 && : > "$fichier")
+    fi
+    CLE=$2 VALEUR=$valeur awk -F= '
+        $1 == ENVIRON["CLE"] && !fait { print ENVIRON["CLE"] "=" ENVIRON["VALEUR"]; fait = 1; next }
+        { print }
+        END { if (!fait) print ENVIRON["CLE"] "=" ENVIRON["VALEUR"] }
+    ' "$fichier" > "$fichier.tmp"
+    cat "$fichier.tmp" > "$fichier"  # garde les droits du fichier (600)
+    rm -f "$fichier.tmp"
+}
+
 # Vérifie que Docker est installé, démarré et utilisable sans sudo
 verifier_docker() {
     local sortie

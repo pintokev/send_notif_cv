@@ -81,7 +81,7 @@ Il faut seulement [Docker](https://docs.docker.com/engine/install/) sur un serve
 
 Relancé plus tard, il permet de modifier une partie du `.env` (l'ancienne version est gardée dans `.env.bak`) ou d'ajouter une personne.
 
-**`lancer`** déclenche une recherche à la demande, sans attendre l'heure prévue : avec envoi du mail, ou en aperçu, sans envoi (le mail est alors enregistré dans `data/<profil>/last_email.html`, et ouvert dans le navigateur sous Windows et macOS). Il permet aussi d'envoyer un mail de test, de voir le profil déduit du CV, et d'activer ou d'arrêter l'envoi automatique quotidien. Sans question : `./lancer.sh <profil> <action>`, avec l'action `envoi`, `apercu`, `test-mail`, `profil`, `activer` ou `arreter`.
+**`lancer`** déclenche une recherche à la demande, sans attendre l'heure prévue : avec envoi du mail, ou en aperçu, sans envoi (le mail est alors enregistré dans `data/<profil>/last_email.html`, et ouvert dans le navigateur sous Windows et macOS). Il permet aussi d'envoyer un mail de test, de voir le profil déduit du CV, et d'activer l'envoi automatique quotidien à l'heure de ton choix, d'en changer l'heure ou de l'arrêter. Sans question : `./lancer.sh <profil> <action>`, avec l'action `envoi`, `apercu`, `test-mail`, `profil`, `activer [HH:MM]`, `heure HH:MM` ou `arreter`.
 
 L'envoi automatique ne fonctionne que si la machine et Docker sont allumés à l'heure prévue. Sur un ordinateur personnel, lancer la recherche avec `lancer` quand tu le souhaites est souvent plus simple.
 

@@ -5,7 +5,7 @@
 # Usage : ./lancer.sh                 avec des menus
 #         ./lancer.sh <nom>           avec des menus, pour cette personne
 #         ./lancer.sh <nom> <action>  sans question. Actions : envoi, apercu, test-mail,
-#                                     profil, activer, arreter
+#                                     profil, activer [HH:MM], heure HH:MM, arreter
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -49,22 +49,41 @@ heure=${heure:-21:00}
 # ─── Action ────────────────────────────────────────────────────────────
 action=${2:-}
 if [[ -z $action ]]; then
+    options=(
+        "Lancer une recherche et envoyer le mail"
+        "Lancer une recherche sans envoyer de mail (aperçu)"
+        "Envoyer un mail de test"
+        "Voir le profil déduit du CV (métier, mots-clés, requêtes)"
+    )
+    actions=(envoi apercu test-mail profil)
     if est_actif "$nom"; then
-        auto="Arrêter l'envoi automatique quotidien (actif, tous les jours à $heure)"
-        auto_action=arreter
+        options+=("Changer l'heure de l'envoi automatique (actuellement tous les jours à $heure)"
+                  "Arrêter l'envoi automatique quotidien")
+        actions+=(heure arreter)
     else
-        auto="Activer l'envoi automatique tous les jours à $heure"
-        auto_action=activer
+        options+=("Activer l'envoi automatique quotidien, à l'heure de ton choix")
+        actions+=(activer)
     fi
     echo
-    choisir "Que veux-tu faire pour « $nom » ?" \
-        "Lancer une recherche et envoyer le mail" \
-        "Lancer une recherche sans envoyer de mail (aperçu)" \
-        "Envoyer un mail de test" \
-        "Voir le profil déduit du CV (métier, mots-clés, requêtes)" \
-        "$auto"
-    actions=(envoi apercu test-mail profil "$auto_action")
+    choisir "Que veux-tu faire pour « $nom » ?" "${options[@]}"
     action=${actions[REPONSE - 1]}
+fi
+
+# Nouvelle heure de l'envoi automatique : en argument, sinon demandée (Entrée = heure actuelle)
+if [[ $action == activer || $action == heure ]]; then
+    nouvelle_heure=${3:-}
+    if [[ -n $nouvelle_heure && ! $nouvelle_heure =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
+        erreur "Heure invalide : $nouvelle_heure (format attendu : HH:MM, ex. 08:30)"
+    fi
+    while [[ ! $nouvelle_heure =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; do
+        if [[ -n $nouvelle_heure ]]; then echo "  → format attendu : HH:MM (ex. 08:30)."; fi
+        demander "Heure de l'envoi automatique, tous les jours (HH:MM)" "$heure"
+        nouvelle_heure=$REPONSE
+    done
+    if [[ $nouvelle_heure != "$heure" ]]; then
+        ecrire_reglage "profils/$nom.env" RUN_AT "$nouvelle_heure"
+        heure=$nouvelle_heure
+    fi
 fi
 
 echo
@@ -89,15 +108,19 @@ case $action in
     profil)
         docker compose run --rm -T "$nom" python -m app profile </dev/null
         ;;
-    activer)
-        docker compose up -d "$nom"
-        ok "Envoi automatique activé : « $nom » recevra ses offres tous les jours à $heure, tant que Docker tourne."
+    activer | heure)
+        if [[ $action == activer ]] || est_actif "$nom"; then
+            docker compose up -d "$nom"  # recrée le conteneur si l'heure a changé
+            ok "Envoi automatique activé : « $nom » recevra ses offres tous les jours à $heure, tant que Docker tourne."
+        else
+            ok "Heure enregistrée ($heure). L'envoi automatique n'est pas actif : ./lancer.sh $nom activer"
+        fi
         ;;
     arreter)
         docker compose stop "$nom"
         ok "Envoi automatique arrêté pour « $nom ». Tu peux toujours lancer une recherche avec ./lancer.sh"
         ;;
     *)
-        erreur "Action inconnue : $action (envoi, apercu, test-mail, profil, activer ou arreter)"
+        erreur "Action inconnue : $action (envoi, apercu, test-mail, profil, activer, heure ou arreter)"
         ;;
 esac

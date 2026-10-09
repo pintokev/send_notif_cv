@@ -15,21 +15,8 @@ ENV=.env                # fichier modifié par ecrire_env
 nouvelle_install=true   # sinon, Entrée garde la valeur actuelle du .env
 MAIL_REGEX='^[^@[:space:],]+@[^@[:space:],]+\.[^@[:space:],]+$'
 
-# ecrire_env CLE valeur : remplace la ligne CLE= du fichier $ENV (ou l'ajoute).
-# Les guillemets simples empêchent Docker Compose d'interpréter les « $ » d'un mot de passe.
-ecrire_env() {
-    local valeur=$2
-    if [[ -n $valeur && $valeur != *"'"* ]]; then
-        valeur="'$valeur'"
-    fi
-    CLE=$1 VALEUR=$valeur awk -F= '
-        $1 == ENVIRON["CLE"] && !fait { print ENVIRON["CLE"] "=" ENVIRON["VALEUR"]; fait = 1; next }
-        { print }
-        END { if (!fait) print ENVIRON["CLE"] "=" ENVIRON["VALEUR"] }
-    ' "$ENV" > "$ENV.tmp"
-    cat "$ENV.tmp" > "$ENV"  # garde les droits du fichier (600)
-    rm -f "$ENV.tmp"
-}
+# ecrire_env CLE valeur : remplace la ligne CLE= du fichier $ENV (ou l'ajoute)
+ecrire_env() { ecrire_reglage "$ENV" "$@"; }
 
 # demander_valeur "Question" CLE [secret] → $REPONSE. Entrée garde la valeur actuelle du .env.
 demander_valeur() {

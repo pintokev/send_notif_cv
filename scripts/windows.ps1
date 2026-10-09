@@ -8,7 +8,8 @@
 param(
     [Parameter(Mandatory = $true)][ValidateSet('installer', 'ajouter', 'lancer')][string]$Commande,
     [string]$Nom = '',
-    [string]$Action = ''
+    [string]$Action = '',
+    [string]$Heure = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +21,7 @@ try { [Console]::OutputEncoding = $Utf8 } catch { }   # accents dans la sortie d
 
 $Override = 'docker-compose.override.yml'
 $MailRegex = '^[^@\s,]+@[^@\s,]+\.[^@\s,]+$'
+$HeureRegex = '^([01][0-9]|2[0-3]):[0-5][0-9]$'
 $MailsRegex = '^[^@\s,]+@[^@\s,]+\.[^@\s,]+(,\s*[^@\s,]+@[^@\s,]+\.[^@\s,]+)*$'
 
 # ─── Affichage et questions ────────────────────────────────────────────
@@ -85,6 +87,20 @@ function Lire-Reglage([string]$Fichier, [string]$Cle) {
         $valeur = $valeur.Substring(1, $valeur.Length - 2)
     }
     return $valeur
+}
+
+# Ecrire-Reglage fichier CLE valeur : remplace la ligne CLE= du fichier (ou l'ajoute ; crée le fichier).
+# Les guillemets simples empêchent Docker Compose d'interpréter les « $ » d'un mot de passe.
+function Ecrire-Reglage([string]$Fichier, [string]$Cle, [string]$Valeur) {
+    if ($Valeur -and -not $Valeur.Contains("'")) { $Valeur = "'$Valeur'" }
+    $lignes = New-Object System.Collections.Generic.List[string]
+    if (Test-Path -LiteralPath $Fichier) { $lignes.AddRange([IO.File]::ReadAllLines($Fichier, $Utf8)) }
+    $fait = $false
+    for ($i = 0; $i -lt $lignes.Count; $i++) {
+        if (-not $fait -and $lignes[$i].StartsWith("$Cle=")) { $lignes[$i] = "$Cle=$Valeur"; $fait = $true }
+    }
+    if (-not $fait) { $lignes.Add("$Cle=$Valeur") }
+    Ecrire-Texte $Fichier (($lignes -join "`n") + "`n")
 }
 
 # ─── Docker ────────────────────────────────────────────────────────────
@@ -155,19 +171,8 @@ function Lancer-Recherche([string]$Nom, [switch]$Apercu) {
 $script:FichierEnv = '.env'          # fichier modifié par Ecrire-Env
 $script:NouvelleInstall = $true      # sinon, Entrée garde la valeur actuelle du .env
 
-# Ecrire-Env CLE valeur : remplace la ligne CLE= du fichier (ou l'ajoute).
-# Les guillemets simples empêchent Docker Compose d'interpréter les « $ » d'un mot de passe.
-function Ecrire-Env([string]$Cle, [string]$Valeur) {
-    if ($Valeur -and -not $Valeur.Contains("'")) { $Valeur = "'$Valeur'" }
-    $lignes = New-Object System.Collections.Generic.List[string]
-    $lignes.AddRange([IO.File]::ReadAllLines($script:FichierEnv, $Utf8))
-    $fait = $false
-    for ($i = 0; $i -lt $lignes.Count; $i++) {
-        if (-not $fait -and $lignes[$i].StartsWith("$Cle=")) { $lignes[$i] = "$Cle=$Valeur"; $fait = $true }
-    }
-    if (-not $fait) { $lignes.Add("$Cle=$Valeur") }
-    Ecrire-Texte $script:FichierEnv (($lignes -join "`n") + "`n")
-}
+# Ecrire-Env CLE valeur : remplace la ligne CLE= du fichier en cours de configuration (ou l'ajoute)
+function Ecrire-Env([string]$Cle, [string]$Valeur) { Ecrire-Reglage $script:FichierEnv $Cle $Valeur }
 
 # Demander-Valeur "Question" CLE [-Secret] [-Obligatoire]. Entrée garde la valeur actuelle du .env.
 function Demander-Valeur([string]$Question, [string]$Cle, [switch]$Secret, [switch]$Obligatoire) {
@@ -573,7 +578,7 @@ GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
 
 # ─── lancer : recherche à la demande ───────────────────────────────────
 
-function Lancer([string]$Nom, [string]$Action) {
+function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure) {
     if (-not (Test-Path -LiteralPath '.env')) { Erreur "Rien n'est encore installé : lance d'abord installer.bat." }
     $profils = @(Services-Compose)
     $actifs = @((Capturer-Docker compose ps --status running --services).Lignes)
@@ -597,20 +602,38 @@ function Lancer([string]$Nom, [string]$Action) {
     if (-not $heure) { $heure = Lire-Reglage '.env' RUN_AT }
     if (-not $heure) { $heure = '21:00' }
 
+    $actif = $actifs -contains $Nom
     if (-not $Action) {
-        if ($actifs -contains $Nom) {
-            $auto = "Arrêter l'envoi automatique quotidien (actif, tous les jours à $heure)"; $autoAction = 'arreter'
-        } else {
-            $auto = "Activer l'envoi automatique tous les jours à $heure"; $autoAction = 'activer'
-        }
-        Write-Host ''
-        $choix = Choisir "Que veux-tu faire pour « $Nom » ?" @(
+        $options = @(
             'Lancer une recherche et envoyer le mail',
             'Lancer une recherche sans envoyer de mail (aperçu)',
             'Envoyer un mail de test',
-            'Voir le profil déduit du CV (métier, mots-clés, requêtes)',
-            $auto)
-        $Action = @('envoi', 'apercu', 'test-mail', 'profil', $autoAction)[$choix - 1]
+            'Voir le profil déduit du CV (métier, mots-clés, requêtes)')
+        $actions = @('envoi', 'apercu', 'test-mail', 'profil')
+        if ($actif) {
+            $options += "Changer l'heure de l'envoi automatique (actuellement tous les jours à $heure)", "Arrêter l'envoi automatique quotidien"
+            $actions += 'heure', 'arreter'
+        } else {
+            $options += "Activer l'envoi automatique quotidien, à l'heure de ton choix"
+            $actions += 'activer'
+        }
+        Write-Host ''
+        $Action = $actions[(Choisir "Que veux-tu faire pour « $Nom » ?" $options) - 1]
+    }
+
+    # Nouvelle heure de l'envoi automatique : en argument, sinon demandée (Entrée = heure actuelle)
+    if ($Action -eq 'activer' -or $Action -eq 'heure') {
+        if ($NouvelleHeure -and $NouvelleHeure -notmatch $HeureRegex) {
+            Erreur "Heure invalide : $NouvelleHeure (format attendu : HH:MM, ex. 08:30)"
+        }
+        while ($NouvelleHeure -notmatch $HeureRegex) {
+            if ($NouvelleHeure) { Write-Host '  → format attendu : HH:MM (ex. 08:30).' }
+            $NouvelleHeure = Demander "Heure de l'envoi automatique, tous les jours (HH:MM)" $heure
+        }
+        if ($NouvelleHeure -ne $heure) {
+            Ecrire-Reglage "profils\$Nom.env" RUN_AT $NouvelleHeure
+            $heure = $NouvelleHeure
+        }
     }
 
     Write-Host ''
@@ -623,15 +646,20 @@ function Lancer([string]$Nom, [string]$Action) {
             Ok 'Mail de test envoyé : vérifie la boîte de réception (et les spams).'
         }
         'profil' { if (-not (Lancer-Docker compose run --rm -T $Nom python -m app profile)) { exit 1 } }
-        'activer' {
-            if (-not (Lancer-Docker compose up -d $Nom)) { exit 1 }
-            Ok "Envoi automatique activé : « $Nom » recevra ses offres tous les jours à $heure, tant que Docker Desktop tourne."
+        { $_ -eq 'activer' -or $_ -eq 'heure' } {
+            if ($Action -eq 'activer' -or $actif) {
+                # Recrée le conteneur si l'heure a changé
+                if (-not (Lancer-Docker compose up -d $Nom)) { exit 1 }
+                Ok "Envoi automatique activé : « $Nom » recevra ses offres tous les jours à $heure, tant que Docker Desktop tourne."
+            } else {
+                Ok "Heure enregistrée ($heure). L'envoi automatique n'est pas actif : lancer.bat $Nom activer"
+            }
         }
         'arreter' {
             if (-not (Lancer-Docker compose stop $Nom)) { exit 1 }
             Ok "Envoi automatique arrêté pour « $Nom ». Tu peux toujours lancer une recherche avec lancer.bat."
         }
-        default { Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer ou arreter)" }
+        default { Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer, heure ou arreter)" }
     }
 }
 
@@ -640,5 +668,5 @@ function Lancer([string]$Nom, [string]$Action) {
 switch ($Commande) {
     'installer' { Installer }
     'ajouter' { Verifier-Docker; Ajouter-Personne }
-    'lancer' { Verifier-Docker; Lancer $Nom $Action }
+    'lancer' { Verifier-Docker; Lancer $Nom $Action $Heure }
 }
