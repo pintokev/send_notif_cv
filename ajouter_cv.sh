@@ -46,6 +46,8 @@ else
         nom=$REPONSE
         if [[ ! $nom =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
             echo "  → uniquement des minuscules sans accent, des chiffres et des tirets."
+        elif [[ $nom == tous ]]; then
+            echo "  → « tous » est réservé (./lancer.sh tous agit sur tous les profils)."
         elif grep -qx "$nom" <<<"$existants"; then
             echo "  → « $nom » existe déjà."
         elif [[ -e profils/$nom.env || -e data/$nom ]]; then

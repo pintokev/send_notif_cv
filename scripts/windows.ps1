@@ -383,6 +383,8 @@ function Ajouter-Personne([switch]$Principal) {
             $nom = Demander 'Nom court de la personne (minuscules, chiffres, tirets ; ex. alice)'
             if ($nom -cnotmatch '^[a-z0-9][a-z0-9-]*$') {
                 Write-Host '  → uniquement des minuscules sans accent, des chiffres et des tirets.'
+            } elseif ($nom -eq 'tous') {
+                Write-Host '  → « tous » est réservé (lancer.bat tous agit sur tous les profils).'
             } elseif ($existants -contains $nom) {
                 Write-Host "  → « $nom » existe déjà."
             } elseif ((Test-Path -LiteralPath "profils\$nom.env") -or (Test-Path -LiteralPath "data\$nom")) {
@@ -578,89 +580,150 @@ GOOGLEJOBS_SEARCHES_PER_RUN=$recherchesGoogle
 
 # ─── lancer : recherche à la demande ───────────────────────────────────
 
+# Heure-De nom → heure de l'envoi automatique (profil, sinon .env, sinon 21:00)
+function Heure-De([string]$Nom) {
+    $heure = Lire-Reglage "profils\$Nom.env" RUN_AT
+    if (-not $heure) { $heure = Lire-Reglage '.env' RUN_AT }
+    if (-not $heure) { $heure = '21:00' }
+    return $heure
+}
+
+# Executer nom action → $true si l'action a réussi pour cette personne
+function Executer([string]$Nom, [string]$Action, [bool]$Actif) {
+    $heure = Heure-De $Nom
+    switch ($Action) {
+        'envoi' { return (Lancer-Recherche $Nom) }
+        'apercu' { return (Lancer-Recherche $Nom -Apercu) }
+        'test-mail' {
+            if (-not (Lancer-Docker compose run --rm -T $Nom python -m app test-mail)) {
+                Attention "L'envoi du mail de test a échoué pour « $Nom » (voir le message ci-dessus)."
+                return $false
+            }
+            Ok "Mail de test envoyé pour « $Nom » : vérifie la boîte de réception (et les spams)."
+            return $true
+        }
+        'profil' { return (Lancer-Docker compose run --rm -T $Nom python -m app profile) }
+        { $_ -eq 'activer' -or $_ -eq 'heure' } {
+            if ($Action -eq 'activer' -or $Actif) {
+                # Recrée le conteneur si l'heure a changé
+                if (-not (Lancer-Docker compose up -d $Nom)) { return $false }
+                Ok "Envoi automatique activé : « $Nom » recevra ses offres tous les jours à $heure, tant que Docker Desktop tourne."
+            } else {
+                Ok "Heure enregistrée ($heure). L'envoi automatique n'est pas actif : lancer.bat $Nom activer"
+            }
+            return $true
+        }
+        'arreter' {
+            if (-not (Lancer-Docker compose stop $Nom)) { return $false }
+            Ok "Envoi automatique arrêté pour « $Nom ». Tu peux toujours lancer une recherche avec lancer.bat."
+            return $true
+        }
+    }
+}
+
 function Lancer([string]$Nom, [string]$Action, [string]$NouvelleHeure) {
     if (-not (Test-Path -LiteralPath '.env')) { Erreur "Rien n'est encore installé : lance d'abord installer.bat." }
     $profils = @(Services-Compose)
     $actifs = @((Capturer-Docker compose ps --status running --services).Lignes)
 
+    # Personne
     if (-not $Nom) {
         if ($profils.Count -eq 1) {
             $Nom = $profils[0]
         } else {
-            $options = foreach ($p in $profils) { if ($actifs -contains $p) { "$p (envoi automatique actif)" } else { $p } }
+            $options = @(foreach ($p in $profils) { if ($actifs -contains $p) { "$p (envoi automatique actif)" } else { $p } })
             Write-Host ''
-            $Nom = $profils[(Choisir 'Pour qui ?' @($options)) - 1]
+            $choix = Choisir 'Pour qui ?' ($options + 'Tous les profils')
+            $Nom = if ($choix -gt $profils.Count) { 'tous' } else { $profils[$choix - 1] }
         }
-    } elseif ($profils -notcontains $Nom) {
-        Erreur "Profil « $Nom » inconnu. Profils existants : $($profils -join ' ')"
-    }
-    if (-not (Test-Path -LiteralPath "data\$Nom\cv.pdf")) {
-        Erreur "Pas de CV pour « $Nom » : dépose-le dans data\$Nom\cv.pdf, ou lance installer.bat."
+    } elseif ($Nom -ne 'tous' -and $profils -notcontains $Nom) {
+        Erreur "Profil « $Nom » inconnu. Profils existants : $($profils -join ' ') (ou « tous »)"
     }
 
-    $heure = Lire-Reglage "profils\$Nom.env" RUN_AT
-    if (-not $heure) { $heure = Lire-Reglage '.env' RUN_AT }
-    if (-not $heure) { $heure = '21:00' }
-
-    $actif = $actifs -contains $Nom
-    if (-not $Action) {
-        $options = @(
-            'Lancer une recherche et envoyer le mail',
-            'Lancer une recherche sans envoyer de mail (aperçu)',
-            'Envoyer un mail de test',
-            'Voir le profil déduit du CV (métier, mots-clés, requêtes)')
-        $actions = @('envoi', 'apercu', 'test-mail', 'profil')
-        if ($actif) {
-            $options += "Changer l'heure de l'envoi automatique (actuellement tous les jours à $heure)", "Arrêter l'envoi automatique quotidien"
-            $actions += 'heure', 'arreter'
-        } else {
-            $options += "Activer l'envoi automatique quotidien, à l'heure de ton choix"
-            $actions += 'activer'
+    # Action
+    if ($Nom -eq 'tous') {
+        if (-not $Action) {
+            Write-Host ''
+            $choix = Choisir "Que veux-tu faire pour tous les profils, l'un après l'autre ?" @(
+                'Lancer une recherche et envoyer le mail',
+                'Lancer une recherche sans envoyer de mail (aperçu)',
+                'Envoyer un mail de test',
+                "Activer l'envoi automatique quotidien (chacun à son heure)",
+                "Arrêter l'envoi automatique quotidien")
+            $Action = @('envoi', 'apercu', 'test-mail', 'activer', 'arreter')[$choix - 1]
         }
-        Write-Host ''
-        $Action = $actions[(Choisir "Que veux-tu faire pour « $Nom » ?" $options) - 1]
+        if ($Action -eq 'heure') { Erreur "Pour changer l'heure, choisis un profil : lancer.bat <nom> heure HH:MM" }
+        if (@('envoi', 'apercu', 'test-mail', 'profil', 'activer', 'arreter') -notcontains $Action) {
+            Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer ou arreter)"
+        }
+        if ($NouvelleHeure) { Erreur "Avec « tous », chacun garde son heure : lancer.bat <nom> $Action HH:MM pour en changer." }
+    } else {
+        if (-not (Test-Path -LiteralPath "data\$Nom\cv.pdf")) {
+            Erreur "Pas de CV pour « $Nom » : dépose-le dans data\$Nom\cv.pdf, ou lance installer.bat."
+        }
+        $heure = Heure-De $Nom
+        if (-not $Action) {
+            $options = @(
+                'Lancer une recherche et envoyer le mail',
+                'Lancer une recherche sans envoyer de mail (aperçu)',
+                'Envoyer un mail de test',
+                'Voir le profil déduit du CV (métier, mots-clés, requêtes)')
+            $actions = @('envoi', 'apercu', 'test-mail', 'profil')
+            if ($actifs -contains $Nom) {
+                $options += "Changer l'heure de l'envoi automatique (actuellement tous les jours à $heure)", "Arrêter l'envoi automatique quotidien"
+                $actions += 'heure', 'arreter'
+            } else {
+                $options += "Activer l'envoi automatique quotidien, à l'heure de ton choix"
+                $actions += 'activer'
+            }
+            Write-Host ''
+            $Action = $actions[(Choisir "Que veux-tu faire pour « $Nom » ?" $options) - 1]
+        }
+        if (@('envoi', 'apercu', 'test-mail', 'profil', 'activer', 'heure', 'arreter') -notcontains $Action) {
+            Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer, heure ou arreter)"
+        }
+
+        # Nouvelle heure de l'envoi automatique : en argument, sinon demandée (Entrée = heure actuelle)
+        if ($Action -eq 'activer' -or $Action -eq 'heure') {
+            if ($NouvelleHeure -and $NouvelleHeure -notmatch $HeureRegex) {
+                Erreur "Heure invalide : $NouvelleHeure (format attendu : HH:MM, ex. 08:30)"
+            }
+            while ($NouvelleHeure -notmatch $HeureRegex) {
+                if ($NouvelleHeure) { Write-Host '  → format attendu : HH:MM (ex. 08:30).' }
+                $NouvelleHeure = Demander "Heure de l'envoi automatique, tous les jours (HH:MM)" $heure
+            }
+            if ($NouvelleHeure -ne $heure) { Ecrire-Reglage "profils\$Nom.env" RUN_AT $NouvelleHeure }
+        }
     }
 
-    # Nouvelle heure de l'envoi automatique : en argument, sinon demandée (Entrée = heure actuelle)
-    if ($Action -eq 'activer' -or $Action -eq 'heure') {
-        if ($NouvelleHeure -and $NouvelleHeure -notmatch $HeureRegex) {
-            Erreur "Heure invalide : $NouvelleHeure (format attendu : HH:MM, ex. 08:30)"
-        }
-        while ($NouvelleHeure -notmatch $HeureRegex) {
-            if ($NouvelleHeure) { Write-Host '  → format attendu : HH:MM (ex. 08:30).' }
-            $NouvelleHeure = Demander "Heure de l'envoi automatique, tous les jours (HH:MM)" $heure
-        }
-        if ($NouvelleHeure -ne $heure) {
-            Ecrire-Reglage "profils\$Nom.env" RUN_AT $NouvelleHeure
-            $heure = $NouvelleHeure
-        }
-    }
-
+    # Exécution
     Write-Host ''
     Construire-Image
-    switch ($Action) {
-        'envoi' { if (-not (Lancer-Recherche $Nom)) { exit 1 } }
-        'apercu' { if (-not (Lancer-Recherche $Nom -Apercu)) { exit 1 } }
-        'test-mail' {
-            if (-not (Lancer-Docker compose run --rm -T $Nom python -m app test-mail)) { Erreur "L'envoi a échoué (voir le message ci-dessus)." }
-            Ok 'Mail de test envoyé : vérifie la boîte de réception (et les spams).'
-        }
-        'profil' { if (-not (Lancer-Docker compose run --rm -T $Nom python -m app profile)) { exit 1 } }
-        { $_ -eq 'activer' -or $_ -eq 'heure' } {
-            if ($Action -eq 'activer' -or $actif) {
-                # Recrée le conteneur si l'heure a changé
-                if (-not (Lancer-Docker compose up -d $Nom)) { exit 1 }
-                Ok "Envoi automatique activé : « $Nom » recevra ses offres tous les jours à $heure, tant que Docker Desktop tourne."
-            } else {
-                Ok "Heure enregistrée ($heure). L'envoi automatique n'est pas actif : lancer.bat $Nom activer"
-            }
-        }
-        'arreter' {
-            if (-not (Lancer-Docker compose stop $Nom)) { exit 1 }
-            Ok "Envoi automatique arrêté pour « $Nom ». Tu peux toujours lancer une recherche avec lancer.bat."
-        }
-        default { Erreur "Action inconnue : $Action (envoi, apercu, test-mail, profil, activer, heure ou arreter)" }
+    if ($Nom -ne 'tous') {
+        if (-not (Executer $Nom $Action ($actifs -contains $Nom))) { exit 1 }
+        return
     }
+
+    # Tous les profils, l'un après l'autre : un échec n'arrête pas les suivants
+    $bilan = @()
+    $echecs = 0
+    foreach ($p in $profils) {
+        Write-Host ''
+        Info "═══ $p ═══"
+        if (-not (Test-Path -LiteralPath "data\$p\cv.pdf")) {
+            Attention "Pas de CV dans data\$p\cv.pdf : profil ignoré."
+            $bilan += "-    $p : ignoré (pas de CV)"
+        } elseif (Executer $p $Action ($actifs -contains $p)) {
+            $bilan += "[OK] $p"
+        } else {
+            $bilan += "[X]  $p : échec (voir plus haut)"
+            $echecs++
+        }
+    }
+    Write-Host ''
+    Info '═══ Récapitulatif ═══'
+    foreach ($ligne in $bilan) { Write-Host "  $ligne" }
+    if ($echecs -gt 0) { exit 1 }
 }
 
 # ─── Point d'entrée ────────────────────────────────────────────────────
